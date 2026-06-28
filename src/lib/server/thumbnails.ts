@@ -133,13 +133,17 @@ async function OpenGraphThumbnail(SourceUrl: string) {
 	try {
 		const Response = await fetch(SourceUrl, {
 			headers: {
-				'user-agent': 'Mozilla/5.0 VantageBot/1.0',
-				accept: 'text/html,application/xhtml+xml'
+				'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+				accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+				'accept-language': 'en-US,en;q=0.9'
 			}
 		});
 		if (!Response.ok) return null;
 		const Html = await Response.text();
-		return ResolveMaybeRelativeUrl(MatchMeta(Html, 'og:image') ?? MatchMeta(Html, 'twitter:image'), SourceUrl);
+		return ResolveMaybeRelativeUrl(
+			MatchMeta(Html, 'og:image:secure_url') ?? MatchMeta(Html, 'og:image') ?? MatchMeta(Html, 'twitter:image') ?? MatchMeta(Html, 'twitter:image:src'),
+			SourceUrl
+		);
 	} catch {
 		return null;
 	}
@@ -183,9 +187,18 @@ function MatchMeta(Html: string, Property: string) {
 	for (const Tag of Tags) {
 		if (!new RegExp(`(?:property|name)=["']${Escaped}["']`, 'i').test(Tag)) continue;
 		const Content = Tag.match(/content=["']([^"']+)["']/i)?.[1];
-		if (Content) return Content;
+		if (Content) return DecodeHtmlEntities(Content);
 	}
 	return null;
+}
+
+function DecodeHtmlEntities(Value: string) {
+	return Value
+		.replaceAll('&amp;', '&')
+		.replaceAll('&quot;', '"')
+		.replaceAll('&#39;', "'")
+		.replaceAll('&lt;', '<')
+		.replaceAll('&gt;', '>');
 }
 
 function ResolveMaybeRelativeUrl(Url: string | null, BaseUrl: string) {

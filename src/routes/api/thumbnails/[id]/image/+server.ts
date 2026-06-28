@@ -1,8 +1,12 @@
-import { EnsureAppDatabaseReady, Get, Run } from '$lib/server/db/app-db';
+import { All, EnsureAppDatabaseReady, Get, Run } from '$lib/server/db/app-db';
 import { NormalizeThumbnailUrl, ResolveContentThumbnail, ResolveCreatorImage } from '$lib/server/thumbnails';
 
 const CacheHeaders = {
 	'cache-control': 'public, max-age=3600, stale-while-revalidate=86400'
+};
+
+const FallbackHeaders = {
+	'cache-control': 'no-store'
 };
 
 export async function GET({ params }) {
@@ -34,19 +38,21 @@ export async function GET({ params }) {
 		}
 	}
 
-	const Account = await Get<SourceAccountRow>(
-		`select handle, external_id, source_url
+	const Accounts = await All<SourceAccountRow>(
+		`select platform, handle, external_id, source_url
 		 from platform_accounts
-		 where lower(creator) = lower(?) and platform = ?
-		 limit 1`,
+		 where lower(creator) = lower(?)
+		 order by case platform
+			when ? then 0
+			when 'YouTube' then 1
+			when 'Twitch' then 2
+			when 'X' then 3
+			when 'Kick' then 4
+			else 5
+		 end`,
 		[Item.creator ?? '', Item.platform ?? '']
 	);
-	const CreatorImage = await ResolveCreatorImage({
-		Platform: Item.platform,
-		ExternalId: Account?.external_id ?? Item.external_id,
-		Handle: Account?.handle,
-		SourceUrl: Account?.source_url ?? Item.source_url
-	});
+	const CreatorImage = await FirstCreatorImage(Item, Accounts);
 	if (CreatorImage) {
 		const CreatorImageResponse = await FetchImage(CreatorImage);
 		if (CreatorImageResponse) {
@@ -56,6 +62,22 @@ export async function GET({ params }) {
 	}
 
 	return GeneratedFallback(Item);
+}
+
+async function FirstCreatorImage(Item: ThumbnailImageRow, Accounts: SourceAccountRow[]) {
+	for (const Account of [
+		...Accounts,
+		{ platform: Item.platform, external_id: Item.external_id, source_url: Item.source_url }
+	]) {
+		const CreatorImage = await ResolveCreatorImage({
+			Platform: Account.platform,
+			ExternalId: Account.external_id,
+			Handle: Account.handle,
+			SourceUrl: Account.source_url
+		});
+		if (CreatorImage) return CreatorImage;
+	}
+	return null;
 }
 
 async function FetchImage(Url: string) {
@@ -114,7 +136,7 @@ function GeneratedFallback(Item: ThumbnailImageRow) {
 	</svg>`;
 	return new Response(Svg, {
 		headers: {
-			...CacheHeaders,
+			...FallbackHeaders,
 			'content-type': 'image/svg+xml; charset=utf-8'
 		}
 	});
@@ -155,6 +177,7 @@ type ThumbnailImageRow = {
 };
 
 type SourceAccountRow = {
+	platform?: string | null;
 	handle?: string | null;
 	external_id?: string | null;
 	source_url?: string | null;
