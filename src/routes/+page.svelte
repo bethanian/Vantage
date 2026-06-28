@@ -253,7 +253,7 @@
 	}
 
 	function ThumbnailSrc(Item: ContentItem) {
-		return `/api/thumbnails/${Item.Id}/image?v=2-${encodeURIComponent(Item.ThumbnailUrl ?? Item.PublishedAt ?? '')}`;
+		return `/api/thumbnails/${Item.Id}/image?v=3-${encodeURIComponent(Item.ThumbnailUrl ?? Item.PublishedAt ?? '')}`;
 	}
 
 	function MarkThumbnailFailed(Id: number) {
