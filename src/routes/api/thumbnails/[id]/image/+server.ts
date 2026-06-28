@@ -1,5 +1,5 @@
 import { All, EnsureAppDatabaseReady, Get, Run } from '$lib/server/db/app-db';
-import { NormalizeThumbnailUrl, ResolveContentThumbnail, ResolveCreatorImage } from '$lib/server/thumbnails';
+import { IsGenericThumbnailUrl, NormalizeThumbnailUrl, ResolveContentThumbnail, ResolveCreatorImage } from '$lib/server/thumbnails';
 
 const CacheHeaders = {
 	'cache-control': 'public, max-age=3600, stale-while-revalidate=86400'
@@ -21,7 +21,7 @@ export async function GET({ params }) {
 	if (!Item) return new Response('', { status: 404 });
 
 	const Existing = NormalizeThumbnailUrl(Item.thumbnail_url);
-	const ExistingImage = Existing ? await FetchImage(Existing) : null;
+	const ExistingImage = Existing && !IsGenericThumbnailUrl(Existing) ? await FetchImage(Existing) : null;
 	if (ExistingImage) return ExistingImage;
 
 	const Resolved = await ResolveContentThumbnail({

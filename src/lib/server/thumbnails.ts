@@ -26,6 +26,15 @@ export function NormalizeThumbnailUrl(Url?: string | null) {
 	return Normalized;
 }
 
+export function IsGenericThumbnailUrl(Url?: string | null) {
+	const Normalized = NormalizeThumbnailUrl(Url)?.toLowerCase() ?? '';
+	return Boolean(
+		Normalized.includes('/social-placeholders/') ||
+		Normalized.includes('ttv-static-metadata/twitch_logo') ||
+		Normalized.includes('static-cdn.jtvnw.net/jtv_user_pictures/xarth/404_user')
+	);
+}
+
 export async function ResolveThumbnailUrl(SourceUrl?: string | null, ApiThumbnailUrl?: string | null) {
 	return ResolveContentThumbnail({ SourceUrl, ApiThumbnailUrl });
 }
@@ -33,7 +42,7 @@ export async function ResolveThumbnailUrl(SourceUrl?: string | null, ApiThumbnai
 export async function ResolveContentThumbnail(Input: ContentThumbnailInput) {
 	const { Platform, SourceUrl, ExternalId, ApiThumbnailUrl } = Input;
 	const Normalized = NormalizeThumbnailUrl(ApiThumbnailUrl);
-	if (Normalized) return Normalized;
+	if (Normalized && !IsGenericThumbnailUrl(Normalized)) return Normalized;
 	const YoutubeThumbnail = YoutubeThumbnailFromUrl(SourceUrl, ExternalId);
 	if (YoutubeThumbnail) return YoutubeThumbnail;
 	if (Platform === 'Twitch') {
@@ -160,7 +169,7 @@ async function OpenGraphThumbnail(SourceUrl: string) {
 async function FirstReachableImage(Candidates: (string | null | undefined)[]) {
 	for (const Candidate of Candidates) {
 		const Url = NormalizeThumbnailUrl(Candidate);
-		if (Url && await ImageUrlExists(Url)) return Url;
+		if (Url && !IsGenericThumbnailUrl(Url) && await ImageUrlExists(Url)) return Url;
 	}
 	return null;
 }

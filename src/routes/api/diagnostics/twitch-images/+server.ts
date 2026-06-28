@@ -1,6 +1,6 @@
 import { GetApiCredential } from '$lib/server/api-credentials';
 import { All, EnsureAppDatabaseReady } from '$lib/server/db/app-db';
-import { NormalizeThumbnailUrl, ResolveCreatorImage } from '$lib/server/thumbnails';
+import { IsGenericThumbnailUrl, NormalizeThumbnailUrl, ResolveCreatorImage } from '$lib/server/thumbnails';
 import { json } from '@sveltejs/kit';
 
 export async function GET() {
@@ -41,7 +41,8 @@ export async function GET() {
 				Connected: Boolean(Account.Connected),
 				ResolvedCreatorImage: CreatorImage,
 				FeedItems: CreatorItems.length,
-				ItemsWithoutStoredThumbnail: CreatorItems.filter((Item) => !NormalizeThumbnailUrl(Item.ThumbnailUrl)).length
+				ItemsWithoutStoredThumbnail: CreatorItems.filter((Item) => !NormalizeThumbnailUrl(Item.ThumbnailUrl)).length,
+				ItemsWithGenericThumbnail: CreatorItems.filter((Item) => IsGenericThumbnailUrl(Item.ThumbnailUrl)).length
 			};
 		}))
 	});

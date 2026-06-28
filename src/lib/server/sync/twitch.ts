@@ -3,7 +3,7 @@ import { CalculateOpportunityScore, type OpportunityWeights } from '$lib/opportu
 import { GetApiCredential } from '$lib/server/api-credentials';
 import { GetOpportunityWeights } from '$lib/server/opportunity-settings';
 import { ResolveTwitchSourceIds } from '$lib/server/source-id-resolver';
-import { ResolveCreatorImage, ResolveThumbnailUrl } from '$lib/server/thumbnails';
+import { IsGenericThumbnailUrl, ResolveCreatorImage, ResolveThumbnailUrl } from '$lib/server/thumbnails';
 
 type TwitchTokenResponse = { access_token?: string; message?: string };
 type TwitchStreamResponse = {
@@ -247,11 +247,26 @@ async function ContentId(ExternalId: string) {
 }
 
 async function UpdateExistingContent(Id: number, Item: ExistingContentUpdate) {
+	const ThumbnailUrl = UsableThumbnail(Item.ThumbnailUrl);
 	await Run(
 		`update content_items
-		 set title = ?, age = ?, metric = ?, score = ?, live = ?, source_url = ?, thumbnail_url = coalesce(?, thumbnail_url), published_at = ?
+		 set title = ?, age = ?, metric = ?, score = ?, live = ?, source_url = ?,
+		     thumbnail_url = case when ? is not null and ? != '' then ? else thumbnail_url end,
+		     published_at = ?
 		 where id = ?`,
-		[Item.Title, Item.Age, Item.Metric, Item.Score, Item.Live, Item.SourceUrl, Item.ThumbnailUrl, Item.PublishedAt, Id]
+		[
+			Item.Title,
+			Item.Age,
+			Item.Metric,
+			Item.Score,
+			Item.Live,
+			Item.SourceUrl,
+			ThumbnailUrl,
+			ThumbnailUrl,
+			ThumbnailUrl,
+			Item.PublishedAt,
+			Id
+		]
 	);
 }
 
@@ -269,6 +284,10 @@ function FormatAge(DateText: string) {
 	const HoursOld = Math.max(1, Math.round((Date.now() - new Date(DateText).getTime()) / 36e5));
 	if (HoursOld < 24) return `${HoursOld}h ago`;
 	return `${Math.round(HoursOld / 24)}d ago`;
+}
+
+function UsableThumbnail(ThumbnailUrl: string | null) {
+	return ThumbnailUrl && !IsGenericThumbnailUrl(ThumbnailUrl) ? ThumbnailUrl : null;
 }
 
 type SourceAccount = {
