@@ -9,12 +9,14 @@ type ContentThumbnailInput = {
 
 export function NormalizeThumbnailUrl(Url?: string | null) {
 	if (!Url) return null;
-	return Url
+	let Normalized = Url
 		.replace(/^\/\//, 'https://')
-		.replaceAll('{width}', '640')
-		.replaceAll('{height}', '360')
-		.replaceAll('%{width}', '640')
-		.replaceAll('%{height}', '360');
+		.replaceAll('{width}', '320')
+		.replaceAll('{height}', '180')
+		.replaceAll('%{width}', '320')
+		.replaceAll('%{height}', '180');
+	if (Normalized.includes('static-cdn.jtvnw.net')) Normalized = Normalized.replace(/-\d+x\d+(\.(?:jpg|jpeg|png|webp))/i, '-320x180$1');
+	return Normalized;
 }
 
 export async function ResolveThumbnailUrl(SourceUrl?: string | null, ApiThumbnailUrl?: string | null) {
@@ -77,7 +79,7 @@ async function OpenGraphThumbnail(SourceUrl: string) {
 		});
 		if (!Response.ok) return null;
 		const Html = await Response.text();
-		return MatchMeta(Html, 'og:image') ?? MatchMeta(Html, 'twitter:image');
+		return ResolveMaybeRelativeUrl(MatchMeta(Html, 'og:image') ?? MatchMeta(Html, 'twitter:image'), SourceUrl);
 	} catch {
 		return null;
 	}
@@ -85,6 +87,20 @@ async function OpenGraphThumbnail(SourceUrl: string) {
 
 function MatchMeta(Html: string, Property: string) {
 	const Escaped = Property.replace(':', '\\s*:\\s*');
-	const Match = Html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${Escaped}["'][^>]+content=["']([^"']+)["']`, 'i'));
-	return Match?.[1] ?? null;
+	const Tags = Html.match(/<meta[^>]+>/gi) ?? [];
+	for (const Tag of Tags) {
+		if (!new RegExp(`(?:property|name)=["']${Escaped}["']`, 'i').test(Tag)) continue;
+		const Content = Tag.match(/content=["']([^"']+)["']/i)?.[1];
+		if (Content) return Content;
+	}
+	return null;
+}
+
+function ResolveMaybeRelativeUrl(Url: string | null, BaseUrl: string) {
+	if (!Url) return null;
+	try {
+		return new URL(Url, BaseUrl).toString();
+	} catch {
+		return Url;
+	}
 }

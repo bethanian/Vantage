@@ -39,7 +39,7 @@ export async function SyncKickLivestreams() {
 	await ResolveKickSourceIds();
 
 	const Accounts = await All<KickAccount>(
-		`select id as "Id", creator as "Creator", external_id as "ExternalId", handle as "Handle"
+		`select id as "Id", creator as "Creator", external_id as "ExternalId", handle as "Handle", source_url as "SourceUrl"
 		 from platform_accounts where platform = ?`,
 		['Kick']
 	);
@@ -55,6 +55,7 @@ export async function SyncKickLivestreams() {
 				const Message = 'Kick sync needs numeric broadcaster_user_id; account remains manual';
 				Errors.push(`${Account.Creator}: ${Message}`);
 				await Run('update platform_accounts set last_error = ? where id = ?', [Message, Account.Id]);
+				ItemsFound += await UpsertKickChannelFallback(Account, ScoreWeights);
 				continue;
 			}
 			try {
@@ -162,7 +163,54 @@ async function SyncAccount(
 		);
 		Count += 1;
 	}
+	if (Count === 0) Count += await UpsertKickChannelFallback(Account, ScoreWeights);
 	return Count;
+}
+
+async function UpsertKickChannelFallback(Account: KickAccount, ScoreWeights: OpportunityWeights) {
+	const SourceUrl = Account.SourceUrl ?? `https://kick.com/${Account.Handle.replace(/^@/, '')}`;
+	const ExternalId = `kick-channel-${Account.Id}`;
+	const Title = `Check ${Account.Creator} on Kick`;
+	const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, null);
+	const Score = CalculateOpportunityScore({ Platform: 'Kick', Kind: 'Channel watch', Title, Status: 'New' }, ScoreWeights);
+	const ExistingId = await ContentId(ExternalId);
+	if (ExistingId) {
+		await UpdateExistingContent(ExistingId, {
+			Title,
+			Age: 'channel check',
+			Metric: Account.Handle,
+			Score,
+			Live: false,
+			SourceUrl,
+			ThumbnailUrl,
+			PublishedAt: new Date().toISOString()
+		});
+		return 0;
+	}
+	await Run(
+		`insert into content_items
+		 (id, creator, external_id, platform, kind, title, age, metric, campaign, status, score, live, velocity, source_url, thumbnail_url, published_at)
+		 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		[
+			await NextId('content_items'),
+			Account.Creator,
+			ExternalId,
+			'Kick',
+			'Channel watch',
+			Title,
+			'channel check',
+			Account.Handle,
+			'Organic',
+			'New',
+			Score,
+			false,
+			null,
+			SourceUrl,
+			ThumbnailUrl,
+			new Date().toISOString()
+		]
+	);
+	return 1;
 }
 
 async function KickGet<T extends { message?: string }>(Url: URL, ClientId: string, Token: string) {
@@ -212,6 +260,7 @@ type KickAccount = {
 	Creator: string;
 	ExternalId: string;
 	Handle: string;
+	SourceUrl?: string | null;
 };
 
 type ExistingContentUpdate = {
