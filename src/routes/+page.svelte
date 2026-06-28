@@ -52,7 +52,7 @@
 	];
 	const QueueFilters = ['All', 'To Clip', 'Finished', 'Uploaded'];
 	const QueueStatuses = QueueFilters.filter((Filter) => Filter !== 'All');
-	const SortModes = ['Opportunity score', 'Newest first', 'Source name', 'Engagement velocity'];
+	const SortModes = ['Opportunity score', 'Most popular creator', 'Newest first', 'Source name', 'Engagement velocity'];
 	const SidebarGroups = $derived([
 		{
 			Label: 'Platforms',
@@ -82,6 +82,14 @@
 		return [...Names].sort((A, B) => A.localeCompare(B));
 	});
 	const LatestSync = $derived(SyncRuns.at(-1));
+	const CreatorPopularity = $derived.by(() => {
+		const Scores = new Map<string, number>();
+		for (const Item of ContentItems) {
+			const Popularity = MetricNumber(Item.Metric) + Item.Score * 1000 + (Item.Live ? 5000 : 0);
+			Scores.set(Item.Creator, Math.max(Scores.get(Item.Creator) ?? 0, Popularity));
+		}
+		return Scores;
+	});
 	const FeedItems = $derived.by(() => {
 		const Filtered = ContentItems.filter(
 			(Item) =>
@@ -92,6 +100,10 @@
 		return [...Filtered].sort((A, B) => {
 			if (SortMode === 'Source name') return A.Creator.localeCompare(B.Creator);
 			if (SortMode === 'Newest first') return B.Id - A.Id;
+			if (SortMode === 'Most popular creator') {
+				const PopularityDelta = (CreatorPopularity.get(B.Creator) ?? 0) - (CreatorPopularity.get(A.Creator) ?? 0);
+				return PopularityDelta || B.Score - A.Score;
+			}
 			return B.Score - A.Score;
 		});
 	});
@@ -182,6 +194,17 @@
 			Targets: { ...Task.Targets },
 			UploadUrls: { ...Task.UploadUrls }
 		}));
+	}
+
+	function MetricNumber(Metric?: string | null) {
+		const Text = Metric?.toLowerCase() ?? '';
+		const Match = Text.match(/([\d,.]+)\s*([kmb])?/);
+		if (!Match) return 0;
+		const Base = Number(Match[1].replace(/,/g, ''));
+		if (!Number.isFinite(Base)) return 0;
+		const Multiplier = Match[2] === 'b' ? 1_000_000_000 : Match[2] === 'm' ? 1_000_000 : Match[2] === 'k' ? 1_000 : 1;
+		const ContextBoost = /watching|viewer|view/.test(Text) ? 1 : 0.65;
+		return Base * Multiplier * ContextBoost;
 	}
 
 	function InitialContentState() {
