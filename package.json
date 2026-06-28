@@ -1,0 +1,40 @@
+{
+	"name": "vantage",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build",
+		"preview": "vite preview",
+		"db:generate": "drizzle-kit generate",
+		"db:migrate": "drizzle-kit migrate",
+		"db:pg:generate": "drizzle-kit generate --config drizzle.postgres.config.ts",
+		"db:pg:migrate": "drizzle-kit migrate --config drizzle.postgres.config.ts",
+		"db:pg:push-local": "tsx scripts/push-sqlite-to-postgres.ts",
+		"sync:once": "tsx scripts/sync-worker.ts --once",
+		"sync:worker": "tsx scripts/sync-worker.ts",
+		"prepare": "svelte-kit sync || echo ''",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-auto": "^7.0.1",
+		"@sveltejs/adapter-vercel": "^6.3.4",
+		"@sveltejs/kit": "^2.63.0",
+		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"@types/better-sqlite3": "^7.6.13",
+		"@types/node": "^25.9.3",
+		"drizzle-kit": "^0.31.10",
+		"svelte": "^5.56.1",
+		"svelte-check": "^4.6.0",
+		"tsx": "^4.22.4",
+		"typescript": "^6.0.3",
+		"vite": "^8.0.16"
+	},
+	"dependencies": {
+		"better-sqlite3": "^12.10.1",
+		"drizzle-orm": "^0.45.2",
+		"postgres": "^3.4.9"
+	}
+}

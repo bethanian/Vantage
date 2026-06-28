@@ -1,0 +1,11 @@
+node_modules
+.svelte-kit
+.vercel
+.codex
+build
+data
+.env
+.env.*
+!.env.example
+*.png
+tmp-vantage-dev.*
