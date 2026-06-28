@@ -195,10 +195,7 @@ export const actions: Actions = {
 		if (!ContentId) return fail(400, { Message: 'Content item id is required' });
 		const Item = await Get<ContentRow>('select * from content_items where id = ?', [ContentId]);
 		if (!Item) return fail(404, { Message: 'Content item was not found' });
-		const Exists = await Get(
-			"select 1 from clip_tasks where creator = ? and source = ? and coalesce(source_url, '') = coalesce(?, '') limit 1",
-			[Item.creator, Item.title, Item.source_url ?? '']
-		);
+		const Exists = await FindQueuedTask(Item);
 		if (Exists) return { Created: 'ClipTask' };
 
 		const Id = await NextId('clip_tasks');
@@ -238,15 +235,16 @@ export const actions: Actions = {
 		if (!ContentId) return fail(400, { Message: 'Content item id is required' });
 		const Item = await Get<ContentRow>('select * from content_items where id = ?', [ContentId]);
 		if (!Item) return fail(404, { Message: 'Content item was not found' });
-		const Task = await Get<{ id: number }>(
-			"select id from clip_tasks where creator = ? and source = ? and coalesce(source_url, '') = coalesce(?, '') limit 1",
-			[Item.creator, Item.title, Item.source_url ?? '']
-		);
+		const Task = await FindQueuedTask(Item);
 		if (!Task) return { Deleted: 'ClipTask' };
 		await Run('delete from clip_tasks where id = ?', [Task.id]);
 		await Run("update content_items set status = 'New' where id = ? and status = 'Watched'", [ContentId]);
-		await MarkContentAction(ContentId, Actor, 'Removed from queue');
-		await WriteActivity(Actor, { EntityType: 'ClipTask', EntityId: Task.id, Action: 'Removed queued clip', Label: `Removed queue item - ${Actor}` });
+		try {
+			await MarkContentAction(ContentId, Actor, 'Removed from queue');
+			await WriteActivity(Actor, { EntityType: 'ClipTask', EntityId: Task.id, Action: 'Removed queued clip', Label: `Removed queue item - ${Actor}` });
+		} catch {
+			return { Deleted: 'ClipTask' };
+		}
 		return { Deleted: 'ClipTask' };
 	},
 
@@ -421,8 +419,15 @@ export const actions: Actions = {
 		const Actor = ActorFromForm(Form);
 		const Id = NumberField(Form, 'Id', 0);
 		if (!Id) return fail(400, { Message: 'Clip task id is required' });
+		const Task = await Get<{ id: number; source_url?: string | null }>('select id, source_url from clip_tasks where id = ? limit 1', [Id]);
+		if (!Task) return { Deleted: 'ClipTask' };
 		await Run('delete from clip_tasks where id = ?', [Id]);
-		await WriteActivity(Actor, { EntityType: 'ClipTask', EntityId: Id, Action: 'Deleted clip' });
+		try {
+			await WriteActivity(Actor, { EntityType: 'ClipTask', EntityId: Id, Action: 'Deleted clip' });
+			if (Task.source_url) await Run("update content_items set status = 'New' where source_url = ? and status = 'Watched'", [Task.source_url]);
+		} catch {
+			return { Deleted: 'ClipTask' };
+		}
 		return { Deleted: 'ClipTask' };
 	},
 
@@ -572,6 +577,20 @@ function UploadUrls(Form: FormData) {
 
 function EmptyUploadUrls() {
 	return JSON.stringify({ TikTok: '', Shorts: '', Reels: '' });
+}
+
+async function FindQueuedTask(Item: ContentRow) {
+	if (Item.source_url) {
+		const ByUrl = await Get<{ id: number }>(
+			'select id from clip_tasks where creator = ? and source = ? and source_url = ? limit 1',
+			[Item.creator, Item.title, Item.source_url]
+		);
+		if (ByUrl) return ByUrl;
+	}
+	return Get<{ id: number }>(
+		"select id from clip_tasks where creator = ? and source = ? and (source_url is null or source_url = '') limit 1",
+		[Item.creator, Item.title]
+	);
 }
 
 function NormalizeQueueStatus(Status: string) {

@@ -226,7 +226,11 @@
 	}
 
 	function HasThumbnail(Item: ContentItem) {
-		return Boolean(Item.ThumbnailUrl && !FailedThumbnailIds.has(Item.Id));
+		return !FailedThumbnailIds.has(Item.Id);
+	}
+
+	function ThumbnailSrc(Item: ContentItem) {
+		return Item.ThumbnailUrl || `/api/thumbnails/${Item.Id}`;
 	}
 
 	function MarkThumbnailFailed(Id: number) {
@@ -285,6 +289,20 @@
 				}
 				await update();
 				PushToast(`Queue item ${Failed ? 'failed' : Mode === 'Add' ? 'saved' : 'removed'}`, Failed ? 'Error' : 'Success');
+			};
+		};
+	}
+
+	function DeleteTaskFeedback(Task: ClipTask): SubmitFunction {
+		return ({ formData }) => {
+			const PreviousQueue = QueueState;
+			formData.set('Actor', CurrentActor());
+			QueueState = QueueState.filter((Item) => Item.Id !== Task.Id);
+			return async ({ result, update }) => {
+				const Failed = result.type === 'failure' || result.type === 'error';
+				if (Failed) QueueState = PreviousQueue;
+				await update();
+				PushToast(`Clip ${Failed ? 'failed' : 'removed'}`, Failed ? 'Error' : 'Success');
 			};
 		};
 	}
@@ -552,7 +570,7 @@
 									<button class:Selected={SelectedFeedItem?.Id === Item.Id} class="LeadMain" onclick={() => SelectFeedItem(Item)}>
 										<div class="LeadMedia">
 											{#if HasThumbnail(Item)}
-												<img src={Item.ThumbnailUrl} alt="" loading="lazy" onerror={() => MarkThumbnailFailed(Item.Id)} />
+												<img src={ThumbnailSrc(Item)} alt="" loading="lazy" onerror={() => MarkThumbnailFailed(Item.Id)} />
 											{:else}
 												<i class={`ti ${PlatformIcon(Item.Platform)}`}></i>
 											{/if}
@@ -596,7 +614,7 @@
 										<span class="RowNum">{Index + 1}</span>
 										<span class="RowThumb">
 											{#if HasThumbnail(Item)}
-												<img src={Item.ThumbnailUrl} alt="" loading="lazy" onerror={() => MarkThumbnailFailed(Item.Id)} />
+												<img src={ThumbnailSrc(Item)} alt="" loading="lazy" onerror={() => MarkThumbnailFailed(Item.Id)} />
 											{:else}
 												<i class={`ti ${PlatformIcon(Item.Platform)}`}></i>
 											{/if}
@@ -660,7 +678,7 @@
 							{#if SelectedFeedItem}
 								<div class="SelectedMedia">
 									{#if HasThumbnail(SelectedFeedItem)}
-										<img src={SelectedFeedItem.ThumbnailUrl} alt="" loading="lazy" onerror={() => MarkThumbnailFailed(SelectedFeedItem.Id)} />
+										<img src={ThumbnailSrc(SelectedFeedItem)} alt="" loading="lazy" onerror={() => MarkThumbnailFailed(SelectedFeedItem.Id)} />
 									{:else}
 										<i class={`ti ${PlatformIcon(SelectedFeedItem.Platform)}`}></i>
 									{/if}
@@ -820,7 +838,7 @@
 								<button class="IconButton" aria-label={`Edit clip task ${Task.Id}`} onclick={() => (EditingTaskId = EditingTaskId === Task.Id ? null : Task.Id)}>
 									<i class="ti ti-edit"></i>
 								</button>
-								<form method="POST" action="?/DeleteClipTask" class="InlineDelete TableDelete" use:enhance={FormFeedback('Clip', 'removed')}>
+								<form method="POST" action="?/DeleteClipTask" class="InlineDelete TableDelete" use:enhance={DeleteTaskFeedback(Task)}>
 									<input type="hidden" name="Id" value={Task.Id} />
 									<button class="IconButton Danger" aria-label={`Delete clip task ${Task.Id}`}><i class="ti ti-trash"></i></button>
 								</form>
