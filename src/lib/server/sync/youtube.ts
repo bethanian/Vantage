@@ -3,7 +3,7 @@ import { CalculateOpportunityScore } from '$lib/opportunity-score';
 import { GetApiCredential } from '$lib/server/api-credentials';
 import { GetOpportunityWeights } from '$lib/server/opportunity-settings';
 import { ResolveYoutubeSourceIds } from '$lib/server/source-id-resolver';
-import { ResolveThumbnailUrl } from '$lib/server/thumbnails';
+import { ResolveCreatorImage, ResolveThumbnailUrl } from '$lib/server/thumbnails';
 
 type YoutubeSearchResponse = {
 	items?: {
@@ -38,7 +38,7 @@ export async function SyncYoutubeUploads() {
 	await ResolveYoutubeSourceIds();
 
 	const Accounts = await All<YoutubeAccount>(
-		`select id as "Id", creator as "Creator", external_id as "ExternalId"
+		`select id as "Id", creator as "Creator", external_id as "ExternalId", handle as "Handle", source_url as "SourceUrl"
 		 from platform_accounts where platform = ?`,
 		['YouTube']
 	);
@@ -55,7 +55,8 @@ export async function SyncYoutubeUploads() {
 				const Snippet = Item.snippet;
 				if (!VideoId || !Snippet?.title) continue;
 				const SourceUrl = `https://www.youtube.com/watch?v=${VideoId}`;
-				const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, Snippet.thumbnails?.medium?.url ?? Snippet.thumbnails?.default?.url);
+				const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, Snippet.thumbnails?.medium?.url ?? Snippet.thumbnails?.default?.url) ??
+					await ResolveCreatorImage({ Platform: 'YouTube', ExternalId: Account.ExternalId, Handle: Account.Handle, SourceUrl: Account.SourceUrl ?? SourceUrl });
 				const Score = CalculateOpportunityScore({
 					Platform: 'YouTube',
 					Kind: 'Upload',
@@ -172,6 +173,8 @@ type YoutubeAccount = {
 	Id: number;
 	Creator: string;
 	ExternalId: string;
+	Handle: string;
+	SourceUrl?: string | null;
 };
 
 type ExistingContentUpdate = {

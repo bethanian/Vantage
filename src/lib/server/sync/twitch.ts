@@ -3,7 +3,7 @@ import { CalculateOpportunityScore, type OpportunityWeights } from '$lib/opportu
 import { GetApiCredential } from '$lib/server/api-credentials';
 import { GetOpportunityWeights } from '$lib/server/opportunity-settings';
 import { ResolveTwitchSourceIds } from '$lib/server/source-id-resolver';
-import { ResolveThumbnailUrl } from '$lib/server/thumbnails';
+import { ResolveCreatorImage, ResolveThumbnailUrl } from '$lib/server/thumbnails';
 
 type TwitchTokenResponse = { access_token?: string; message?: string };
 type TwitchStreamResponse = {
@@ -52,7 +52,7 @@ export async function SyncTwitchSources() {
 	await ResolveTwitchSourceIds();
 
 	const Accounts = await All<SourceAccount>(
-		`select id as "Id", creator as "Creator", external_id as "ExternalId"
+		`select id as "Id", creator as "Creator", external_id as "ExternalId", handle as "Handle", source_url as "SourceUrl"
 		 from platform_accounts where platform = ?`,
 		['Twitch']
 	);
@@ -109,7 +109,8 @@ async function SyncLiveStream(ClientId: string, Token: string, Account: SourceAc
 	for (const Stream of Payload.data ?? []) {
 		const ExternalId = `twitch-stream-${Stream.id}`;
 		const SourceUrl = `https://www.twitch.tv/${Stream.user_name.toLowerCase()}`;
-		const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, Stream.thumbnail_url);
+		const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, Stream.thumbnail_url) ??
+			await ResolveCreatorImage({ Platform: 'Twitch', ExternalId: Account.ExternalId, Handle: Account.Handle, SourceUrl });
 		const Score = CalculateOpportunityScore({
 			Platform: 'Twitch',
 			Kind: 'Live stream',
@@ -170,7 +171,13 @@ async function SyncVideos(ClientId: string, Token: string, Account: SourceAccoun
 	let Count = 0;
 	for (const Video of Payload.data ?? []) {
 		const ExternalId = `twitch-video-${Video.id}`;
-		const ThumbnailUrl = await ResolveThumbnailUrl(Video.url, Video.thumbnail_url);
+		const ThumbnailUrl = await ResolveThumbnailUrl(Video.url, Video.thumbnail_url) ??
+			await ResolveCreatorImage({
+				Platform: 'Twitch',
+				ExternalId: Account.ExternalId,
+				Handle: Account.Handle,
+				SourceUrl: Account.SourceUrl ?? `https://www.twitch.tv/${Account.Handle.replace(/^@/, '')}`
+			});
 		const Score = CalculateOpportunityScore({
 			Platform: 'Twitch',
 			Kind: 'VOD',
@@ -268,6 +275,8 @@ type SourceAccount = {
 	Id: number;
 	Creator: string;
 	ExternalId: string;
+	Handle: string;
+	SourceUrl?: string | null;
 };
 
 type ExistingContentUpdate = {

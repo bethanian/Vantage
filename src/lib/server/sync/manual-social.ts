@@ -1,7 +1,7 @@
 import { CalculateOpportunityScore, type OpportunityWeights } from '$lib/opportunity-score';
 import { All, EnsureAppDatabaseReady, Get, NextId, Run } from '$lib/server/db/app-db';
 import { GetOpportunityWeights } from '$lib/server/opportunity-settings';
-import { ResolveContentThumbnail } from '$lib/server/thumbnails';
+import { ResolveContentThumbnail, ResolveCreatorImage } from '$lib/server/thumbnails';
 
 const ManualPlatforms = ['TikTok', 'Instagram', 'X'] as const;
 
@@ -29,7 +29,8 @@ export async function UpsertManualProfileItem(Account: ManualAccount, ScoreWeigh
 	const SourceUrl = Account.SourceUrl ?? DefaultSourceUrl(Account.Platform, Account.Handle);
 	const ExternalId = `manual-${Account.Platform.toLowerCase()}-${Account.Id}`;
 	const Title = `Check ${Account.Creator} on ${Account.Platform}`;
-	const ThumbnailUrl = await ResolveContentThumbnail({ Platform: Account.Platform, SourceUrl, ExternalId: Account.ExternalId });
+	const ThumbnailUrl = await ResolveContentThumbnail({ Platform: Account.Platform, SourceUrl, ExternalId: Account.ExternalId }) ??
+		await ResolveCreatorImage({ Platform: Account.Platform, SourceUrl, ExternalId: Account.ExternalId, Handle: Account.Handle });
 	const Score = Math.max(62, CalculateOpportunityScore({ Platform: Account.Platform, Kind: 'Profile watch', Title, Status: 'New' }, Weights));
 	const Existing = await Get<{ id: number }>('select id from content_items where external_id = ? limit 1', [ExternalId]);
 	if (Existing) {

@@ -7,6 +7,13 @@ type ContentThumbnailInput = {
 	ApiThumbnailUrl?: string | null;
 };
 
+export type CreatorImageInput = {
+	Platform?: string | null;
+	SourceUrl?: string | null;
+	ExternalId?: string | null;
+	Handle?: string | null;
+};
+
 export function NormalizeThumbnailUrl(Url?: string | null) {
 	if (!Url) return null;
 	let Normalized = Url
@@ -37,6 +44,22 @@ export async function ResolveContentThumbnail(Input: ContentThumbnailInput) {
 	return NormalizeThumbnailUrl(await OpenGraphThumbnail(SourceUrl));
 }
 
+export async function ResolveCreatorImage(Input: CreatorImageInput) {
+	const { Platform, SourceUrl, ExternalId, Handle } = Input;
+	if (Platform === 'Twitch') {
+		const TwitchImage = await TwitchProfileImage(ExternalId, Handle);
+		if (TwitchImage) return TwitchImage;
+	}
+	if (Platform === 'YouTube') {
+		const YoutubeImage = await YoutubeChannelImage(ExternalId, Handle);
+		if (YoutubeImage) return YoutubeImage;
+	}
+	return FirstReachableImage([
+		SourceUrl ? await OpenGraphThumbnail(SourceUrl) : null,
+		...AvatarCandidates(Platform, Handle)
+	]);
+}
+
 function YoutubeThumbnailFromUrl(SourceUrl?: string | null, ExternalId?: string | null) {
 	const VideoId = SourceUrl?.match(/(?:watch\?v=|youtu\.be\/|shorts\/)([\w-]{6,})/i)?.[1] ?? ExternalId?.match(/^[\w-]{6,}$/)?.[0];
 	return VideoId ? `https://i.ytimg.com/vi/${VideoId}/hqdefault.jpg` : null;
@@ -56,6 +79,43 @@ async function TwitchThumbnailFromApi(ExternalId?: string | null, SourceUrl?: st
 	if (!Response.ok) return null;
 	const Payload = (await Response.json()) as { data?: { thumbnail_url?: string }[] };
 	return NormalizeThumbnailUrl(Payload.data?.[0]?.thumbnail_url);
+}
+
+async function TwitchProfileImage(ExternalId?: string | null, Handle?: string | null) {
+	const ClientId = await GetApiCredential('TWITCH_CLIENT_ID');
+	const ClientSecret = await GetApiCredential('TWITCH_CLIENT_SECRET');
+	if (!ClientId || !ClientSecret) return null;
+	const Token = await TwitchToken(ClientId, ClientSecret);
+	if (!Token) return null;
+	const Url = new URL('https://api.twitch.tv/helix/users');
+	if (ExternalId && /^\d+$/.test(ExternalId)) Url.searchParams.set('id', ExternalId);
+	else if (Handle) Url.searchParams.set('login', Handle.replace(/^@/, '').toLowerCase());
+	else return null;
+	const Response = await fetch(Url, { headers: { Authorization: `Bearer ${Token}`, 'Client-Id': ClientId } });
+	if (!Response.ok) return null;
+	const Payload = (await Response.json()) as { data?: { profile_image_url?: string }[] };
+	return NormalizeThumbnailUrl(Payload.data?.[0]?.profile_image_url);
+}
+
+async function YoutubeChannelImage(ExternalId?: string | null, Handle?: string | null) {
+	const ApiKey = await GetApiCredential('YOUTUBE_API_KEY');
+	if (!ApiKey) return null;
+	const Url = new URL('https://www.googleapis.com/youtube/v3/channels');
+	Url.searchParams.set('part', 'snippet');
+	if (ExternalId && /^UC[\w-]{20,}$/.test(ExternalId)) Url.searchParams.set('id', ExternalId);
+	else if (Handle) Url.searchParams.set('forHandle', Handle.replace(/^@/, ''));
+	else return null;
+	Url.searchParams.set('key', ApiKey);
+	const Response = await fetch(Url);
+	if (!Response.ok) return null;
+	const Payload = (await Response.json()) as {
+		items?: { snippet?: { thumbnails?: { high?: { url?: string }; medium?: { url?: string }; default?: { url?: string } } } }[];
+	};
+	return NormalizeThumbnailUrl(
+		Payload.items?.[0]?.snippet?.thumbnails?.high?.url ??
+			Payload.items?.[0]?.snippet?.thumbnails?.medium?.url ??
+			Payload.items?.[0]?.snippet?.thumbnails?.default?.url
+	);
 }
 
 async function TwitchToken(ClientId: string, ClientSecret: string) {
@@ -83,6 +143,38 @@ async function OpenGraphThumbnail(SourceUrl: string) {
 	} catch {
 		return null;
 	}
+}
+
+async function FirstReachableImage(Candidates: (string | null | undefined)[]) {
+	for (const Candidate of Candidates) {
+		const Url = NormalizeThumbnailUrl(Candidate);
+		if (Url && await ImageUrlExists(Url)) return Url;
+	}
+	return null;
+}
+
+async function ImageUrlExists(Url: string) {
+	try {
+		const Controller = new AbortController();
+		const Timeout = setTimeout(() => Controller.abort(), 4500);
+		const Response = await fetch(Url, {
+			headers: { accept: 'image/avif,image/webp,image/png,image/jpeg,image/*,*/*;q=0.8' },
+			signal: Controller.signal
+		});
+		clearTimeout(Timeout);
+		return Response.ok && Boolean(Response.headers.get('content-type')?.startsWith('image/'));
+	} catch {
+		return false;
+	}
+}
+
+function AvatarCandidates(Platform?: string | null, Handle?: string | null) {
+	const CleanHandle = Handle?.replace(/^@/, '');
+	if (!CleanHandle) return [];
+	if (Platform === 'Twitch') return [`https://unavatar.io/twitch/${CleanHandle}`];
+	if (Platform === 'YouTube') return [`https://unavatar.io/youtube/${CleanHandle}`];
+	if (Platform === 'X') return [`https://unavatar.io/x/${CleanHandle}`];
+	return [];
 }
 
 function MatchMeta(Html: string, Property: string) {

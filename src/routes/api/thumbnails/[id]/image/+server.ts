@@ -1,5 +1,5 @@
 import { EnsureAppDatabaseReady, Get, Run } from '$lib/server/db/app-db';
-import { NormalizeThumbnailUrl, ResolveContentThumbnail } from '$lib/server/thumbnails';
+import { NormalizeThumbnailUrl, ResolveContentThumbnail, ResolveCreatorImage } from '$lib/server/thumbnails';
 
 const CacheHeaders = {
 	'cache-control': 'public, max-age=3600, stale-while-revalidate=86400'
@@ -31,6 +31,27 @@ export async function GET({ params }) {
 		if (ResolvedImage) {
 			await Run('update content_items set thumbnail_url = ? where id = ?', [Resolved, Id]);
 			return ResolvedImage;
+		}
+	}
+
+	const Account = await Get<SourceAccountRow>(
+		`select handle, external_id, source_url
+		 from platform_accounts
+		 where lower(creator) = lower(?) and platform = ?
+		 limit 1`,
+		[Item.creator ?? '', Item.platform ?? '']
+	);
+	const CreatorImage = await ResolveCreatorImage({
+		Platform: Item.platform,
+		ExternalId: Account?.external_id ?? Item.external_id,
+		Handle: Account?.handle,
+		SourceUrl: Account?.source_url ?? Item.source_url
+	});
+	if (CreatorImage) {
+		const CreatorImageResponse = await FetchImage(CreatorImage);
+		if (CreatorImageResponse) {
+			await Run('update content_items set thumbnail_url = ? where id = ?', [CreatorImage, Id]);
+			return CreatorImageResponse;
 		}
 	}
 
@@ -131,4 +152,10 @@ type ThumbnailImageRow = {
 	external_id?: string | null;
 	source_url?: string | null;
 	thumbnail_url?: string | null;
+};
+
+type SourceAccountRow = {
+	handle?: string | null;
+	external_id?: string | null;
+	source_url?: string | null;
 };

@@ -3,7 +3,7 @@ import { CalculateOpportunityScore, type OpportunityWeights } from '$lib/opportu
 import { GetApiCredential } from '$lib/server/api-credentials';
 import { GetOpportunityWeights } from '$lib/server/opportunity-settings';
 import { ResolveKickSourceIds } from '$lib/server/source-id-resolver';
-import { ResolveThumbnailUrl } from '$lib/server/thumbnails';
+import { ResolveCreatorImage, ResolveThumbnailUrl } from '$lib/server/thumbnails';
 
 type KickTokenResponse = { access_token?: string; message?: string };
 type KickLivestreamResponse = {
@@ -121,7 +121,8 @@ async function SyncAccount(
 	for (const Stream of Payload.data ?? []) {
 		const ExternalId = `kick-live-${Stream.broadcaster_user_id}-${Stream.started_at}`;
 		const SourceUrl = `https://kick.com/${Stream.slug || Account.Handle.replace(/^@/, '')}`;
-		const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, Stream.thumbnail ?? Stream.category?.thumbnail);
+		const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, Stream.thumbnail ?? Stream.category?.thumbnail) ??
+			await ResolveCreatorImage({ Platform: 'Kick', SourceUrl, ExternalId: Account.ExternalId, Handle: Account.Handle });
 		const Score = CalculateOpportunityScore({
 			Platform: 'Kick',
 			Kind: 'Live stream',
@@ -178,7 +179,8 @@ async function UpsertKickChannelFallback(Account: KickAccount, ScoreWeights: Opp
 	const SourceUrl = Account.SourceUrl ?? `https://kick.com/${Account.Handle.replace(/^@/, '')}`;
 	const ExternalId = `kick-channel-${Account.Id}`;
 	const Title = `Check ${Account.Creator} on Kick`;
-	const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, null);
+	const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, null) ??
+		await ResolveCreatorImage({ Platform: 'Kick', SourceUrl, ExternalId: Account.ExternalId, Handle: Account.Handle });
 	const Score = Math.max(66, CalculateOpportunityScore({ Platform: 'Kick', Kind: 'Channel watch', Title, Status: 'New' }, ScoreWeights));
 	const ExistingId = await ContentId(ExternalId);
 	if (ExistingId) {
