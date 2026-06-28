@@ -48,11 +48,19 @@ export async function ResolveCreatorImage(Input: CreatorImageInput) {
 	const { Platform, SourceUrl, ExternalId, Handle } = Input;
 	if (Platform === 'Twitch') {
 		const TwitchImage = await TwitchProfileImage(ExternalId, Handle);
-		if (TwitchImage) return TwitchImage;
+		return FirstReachableImage([
+			TwitchImage,
+			SourceUrl ? await OpenGraphThumbnail(SourceUrl) : null,
+			...AvatarCandidates(Platform, Handle)
+		]);
 	}
 	if (Platform === 'YouTube') {
 		const YoutubeImage = await YoutubeChannelImage(ExternalId, Handle);
-		if (YoutubeImage) return YoutubeImage;
+		return FirstReachableImage([
+			YoutubeImage,
+			SourceUrl ? await OpenGraphThumbnail(SourceUrl) : null,
+			...AvatarCandidates(Platform, Handle)
+		]);
 	}
 	return FirstReachableImage([
 		SourceUrl ? await OpenGraphThumbnail(SourceUrl) : null,
