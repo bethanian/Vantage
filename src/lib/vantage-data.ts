@@ -1,6 +1,6 @@
 export type Platform = 'Kick' | 'Twitch' | 'YouTube' | 'TikTok' | 'Instagram' | 'X';
 export type ItemStatus = 'New' | 'Watched' | 'Clipped' | 'Uploaded' | 'Rejected';
-export type ViewName = 'Feed' | 'Creators' | 'Queue' | 'Campaigns' | 'Accounts';
+export type ViewName = 'Feed' | 'Queue' | 'Accounts';
 
 export type ContentItem = {
 	Id: number;
@@ -135,7 +135,7 @@ export const ContentItems: ContentItem[] = [
 		Title: "72-hour subathon crosses 150k concurrent viewers",
 		Age: '2h in',
 		Metric: '142k watching',
-		Campaign: 'Whop',
+		Campaign: 'Organic',
 		Status: 'New',
 		Score: 94,
 		Live: true,
@@ -149,7 +149,7 @@ export const ContentItems: ContentItem[] = [
 		Title: '$50k viewer pot challenge spikes during slots marathon',
 		Age: '45m in',
 		Metric: '89k watching',
-		Campaign: 'Clipping.net',
+		Campaign: 'Organic',
 		Status: 'New',
 		Score: 91,
 		Live: true,
@@ -175,7 +175,7 @@ export const ContentItems: ContentItem[] = [
 		Title: 'Celebrity guest confrontation goes fully unfiltered',
 		Age: '3h ago',
 		Metric: 'chat velocity high',
-		Campaign: 'Whop',
+		Campaign: 'Organic',
 		Status: 'New',
 		Score: 71
 	},
@@ -199,7 +199,7 @@ export const ContentItems: ContentItem[] = [
 		Title: 'Training with world cup pros goes completely wrong',
 		Age: '11h ago',
 		Metric: '14M channel',
-		Campaign: 'Clipping.net',
+		Campaign: 'Organic',
 		Status: 'New',
 		Score: 52
 	},
@@ -238,7 +238,7 @@ export const ClipTasks: ClipTask[] = [
 		Timestamp: '1:24:33',
 		Hook: 'nobody expected this to happen live on stream',
 		Score: 94,
-		Status: 'Uploading',
+		Status: 'To Clip',
 		Targets: { TikTok: true, Shorts: false, Reels: false },
 		UploadUrls: { TikTok: '', Shorts: '', Reels: '' }
 	},
@@ -250,7 +250,7 @@ export const ClipTasks: ClipTask[] = [
 		Timestamp: '0:47:12',
 		Hook: 'he won $50,000 on stream and this happened',
 		Score: 91,
-		Status: 'Editing',
+		Status: 'To Clip',
 		Targets: { TikTok: true, Shorts: true, Reels: false },
 		UploadUrls: { TikTok: '', Shorts: '', Reels: '' }
 	},
@@ -262,7 +262,7 @@ export const ClipTasks: ClipTask[] = [
 		Timestamp: '2:11:08',
 		Hook: 'bro actually hit this shot',
 		Score: 76,
-		Status: 'Done',
+		Status: 'Finished',
 		Targets: { TikTok: true, Shorts: true, Reels: true },
 		UploadUrls: { TikTok: '', Shorts: '', Reels: '' }
 	},
@@ -274,7 +274,7 @@ export const ClipTasks: ClipTask[] = [
 		Timestamp: '3:02:44',
 		Hook: "I can't believe he said this on stream",
 		Score: 71,
-		Status: 'To clip',
+		Status: 'To Clip',
 		Targets: { TikTok: false, Shorts: false, Reels: false },
 		UploadUrls: { TikTok: '', Shorts: '', Reels: '' }
 	},
@@ -286,7 +286,7 @@ export const ClipTasks: ClipTask[] = [
 		Timestamp: '1:08:17',
 		Hook: 'he had no idea this was coming',
 		Score: 58,
-		Status: 'Watched',
+		Status: 'To Clip',
 		Targets: { TikTok: false, Shorts: false, Reels: false },
 		UploadUrls: { TikTok: '', Shorts: '', Reels: '' }
 	}
@@ -297,19 +297,19 @@ export const Creators: Creator[] = [
 		Name: 'Kai Cenat',
 		Initial: 'K',
 		Platforms: ['Kick', 'Twitch', 'YouTube'],
-		Campaign: 'Whop',
+		Campaign: 'Organic',
 		LiveViewers: '142k',
 		Followers: '8.4M',
 		AverageScore: 94,
 		ClipsMade: 14,
 		Notes:
-			'Subathon moments tend to peak around hour 2-3. Best hooks: milestone reactions, chat moments, unexpected guests. Whop allows TikTok, Shorts, and Reels.'
+			'Subathon moments tend to peak around hour 2-3. Best hooks: milestone reactions, chat moments, and unexpected guests.'
 	},
 	{
 		Name: 'Trainwreckstv',
 		Initial: 'T',
 		Platforms: ['Kick', 'YouTube'],
-		Campaign: 'Clipping.net',
+		Campaign: 'Organic',
 		LiveViewers: '89k',
 		Followers: '2.2M',
 		AverageScore: 91,
@@ -329,31 +329,4 @@ export const Creators: Creator[] = [
 	}
 ];
 
-export const Campaigns: Campaign[] = [
-	{
-		Name: 'Whop',
-		State: 'Active, renews monthly',
-		Rate: '$4 / 1k views',
-		Niche: 'Business / SaaS',
-		Earned: 180,
-		Goal: 300,
-		Submitted: 23,
-		Allowed: ['TikTok', 'YouTube Shorts', 'Instagram Reels', 'X'],
-		Rules: 'Keep edits native to each platform. Avoid misleading income claims and preserve creator context.',
-		HookRules: 'Lead with the surprising moment or payout reveal in the first two seconds.',
-		BannedTerms: 'guaranteed, risk-free, official partnership'
-	},
-	{
-		Name: 'Clipping.net',
-		State: 'Active, open-ended',
-		Rate: '$3.50 / 1k views',
-		Niche: 'Gaming / IRL',
-		Earned: 104,
-		Goal: 250,
-		Submitted: 11,
-		Allowed: ['TikTok', 'YouTube Shorts', 'Instagram Reels'],
-		Rules: 'Gaming and IRL clips only. No recycled watermarked reposts.',
-		HookRules: 'Start with the reaction, win, fail, or chat spike before adding setup.',
-		BannedTerms: 'giveaway, free money, sponsor confirmed'
-	}
-];
+export const Campaigns: Campaign[] = [];

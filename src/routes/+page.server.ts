@@ -9,13 +9,11 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type {
-	Campaign,
 	ActivityEvent,
 	ApiCredentialStatus,
 	AppSettings,
 	ClipTask,
 	ContentItem,
-	Creator,
 	Platform,
 	PlatformAccount,
 	SavedSearch,
@@ -24,20 +22,6 @@ import type {
 
 export async function load() {
 	await EnsureAppDatabaseReady();
-
-	const Creators = (await All<CreatorRow>(
-		`select id as "Id", name as "Name", initial as "Initial", platforms as "Platforms", campaign as "Campaign",
-		 live_viewers as "LiveViewers", followers as "Followers", average_score as "AverageScore",
-		 clips_made as "ClipsMade", notes as "Notes" from creators`
-	))
-		.map((Creator): Creator => ({ ...Creator, Platforms: JSON.parse(Creator.Platforms) as Platform[] }));
-
-	const Campaigns = (await All<CampaignRow>(
-		`select id as "Id", name as "Name", state as "State", rate as "Rate", niche as "Niche", earned as "Earned",
-		 goal as "Goal", submitted as "Submitted", allowed as "Allowed", rules as "Rules",
-		 hook_rules as "HookRules", banned_terms as "BannedTerms" from campaigns`
-	))
-		.map((Campaign): Campaign => ({ ...Campaign, Allowed: JSON.parse(Campaign.Allowed) as string[] }));
 
 	const ContentItems = (await All<ContentItemRow>(
 		`select id as "Id", creator as "Creator", external_id as "ExternalId", platform as "Platform", kind as "Kind",
@@ -92,7 +76,7 @@ export async function load() {
 	const ApiCredentials = (await GetApiCredentialStatuses()) as ApiCredentialStatus[];
 	const AppSettings = await LoadAppSettings();
 
-	return { ActivityEvents, ApiCredentials, AppSettings, Campaigns, ClipTasks, ContentItems, Creators, PlatformAccounts, SavedSearches, SyncRuns };
+	return { ActivityEvents, ApiCredentials, AppSettings, ClipTasks, ContentItems, PlatformAccounts, SavedSearches, SyncRuns };
 }
 
 export const actions: Actions = {
@@ -166,7 +150,7 @@ export const actions: Actions = {
 		const Source = RequiredText(Form, 'Source');
 		if (!Creator || !Source) return fail(400, { Message: 'Creator and source are required' });
 		const Platform = OptionalText(Form, 'Platform', 'Kick');
-		const Status = OptionalText(Form, 'Status', 'To clip');
+		const Status = NormalizeQueueStatus(OptionalText(Form, 'Status', 'To Clip'));
 		const ScoreWeights = await GetOpportunityWeights();
 
 		const Id = await NextId('clip_tasks');
@@ -218,8 +202,8 @@ export const actions: Actions = {
 		const Id = await NextId('clip_tasks');
 		await Run(
 			`insert into clip_tasks
-			 (id, creator, platform, source, source_url, timestamp, hook, score, status, targets, upload_urls)
-			 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 (id, creator, platform, source, source_url, timestamp, hook, score, status, targets, upload_urls, last_action, last_action_by, last_action_at)
+			 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			[
 				Id,
 				Item.creator,
@@ -229,9 +213,12 @@ export const actions: Actions = {
 				'0:00',
 				SuggestedHook(Item.title),
 				Item.score,
-				'To clip',
+				'To Clip',
 				JSON.stringify({ TikTok: true, Shorts: true, Reels: true }),
-				EmptyUploadUrls()
+				EmptyUploadUrls(),
+				'Queued',
+				Actor,
+				new Date().toISOString()
 			]
 		);
 
@@ -503,7 +490,7 @@ export const actions: Actions = {
 				OptionalText(Form, 'Timestamp', '0:00'),
 				OptionalText(Form, 'Hook', 'clip this moment'),
 				NumberField(Form, 'Score', 50),
-				OptionalText(Form, 'Status', 'To clip'),
+				NormalizeQueueStatus(OptionalText(Form, 'Status', 'To Clip')),
 				JSON.stringify({
 					TikTok: Form.has('TikTok'),
 					Shorts: Form.has('Shorts'),
@@ -554,6 +541,12 @@ function UploadUrls(Form: FormData) {
 
 function EmptyUploadUrls() {
 	return JSON.stringify({ TikTok: '', Shorts: '', Reels: '' });
+}
+
+function NormalizeQueueStatus(Status: string) {
+	if (Status === 'Done') return 'Finished';
+	if (Status === 'To upload' || Status === 'Editing' || Status === 'Uploading' || Status === 'Watched' || Status === 'To clip') return 'To Clip';
+	return ['To Clip', 'Finished', 'Uploaded'].includes(Status) ? Status : 'To Clip';
 }
 
 async function LoadAppSettings(): Promise<AppSettings> {
@@ -642,16 +635,6 @@ type ContentRow = {
 };
 
 type SqliteDatabase = typeof import('$lib/server/db').Sqlite;
-
-type CreatorRow = Omit<Creator, 'Platforms'> & {
-	Id: number;
-	Platforms: string;
-};
-
-type CampaignRow = Omit<Campaign, 'Allowed'> & {
-	Id: number;
-	Allowed: string;
-};
 
 type ContentItemRow = Omit<ContentItem, 'Live' | 'Platform' | 'Status'> & {
 	Platform: string;

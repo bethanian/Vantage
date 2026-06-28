@@ -1,42 +1,51 @@
-# sv
+# Vantage
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+Private social feed and clipping queue for a small team.
 
-## Creating a project
+Vantage is built around one workflow:
 
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
+```text
+Open feed -> inspect fresh source -> open original link -> queue to clip -> finish/upload
 ```
 
-To recreate this project with the same configuration:
+## Local Development
 
-```sh
-# recreate this project
-npx sv@0.16.1 create --template minimal --types ts --install npm .
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
+```powershell
+npm install
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
 
-## Building
+The local app uses SQLite when `POSTGRES_URL` is not set.
 
-To create a production version of your app:
+## Production
 
-```sh
+Vercel should have:
+
+```text
+POSTGRES_URL
+YOUTUBE_API_KEY
+KICK_CLIENT_ID
+KICK_CLIENT_SECRET
+TWITCH_CLIENT_ID
+TWITCH_CLIENT_SECRET
+```
+
+Apply Postgres migrations:
+
+```powershell
+npm run db:pg:migrate
+```
+
+Push local SQLite data to Postgres:
+
+```powershell
+$env:SQLITE_DB_PATH="C:\Users\Dean\Documents\holygrail\Vantage\data\vantage.db"
+npm run db:pg:push-local
+```
+
+## Checks
+
+```powershell
+npm run check
 npm run build
 ```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.

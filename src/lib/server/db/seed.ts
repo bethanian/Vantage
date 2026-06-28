@@ -374,7 +374,7 @@ function SeedCreatorWatchlist() {
 }
 
 function SeedSavedSearches() {
-	for (const Query of ['Whop', 'challenge', 'reaction']) {
+	for (const Query of ['challenge', 'reaction', 'live stream']) {
 		const Exists = Sqlite.prepare('select 1 from saved_searches where lower(query) = lower(?) limit 1').get(Query);
 		if (Exists) continue;
 		Db.insert(SavedSearchesTable)

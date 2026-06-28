@@ -3,7 +3,7 @@ import { EnsureAppDatabaseReady, Run } from '$lib/server/db/app-db';
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
-const ValidStatuses = new Set(['To upload', 'Editing', 'Done', 'Uploading', 'Watched', 'To clip']);
+const ValidStatuses = new Set(['To Clip', 'Finished', 'Uploaded']);
 
 export const PATCH: RequestHandler = async ({ params, request }) => {
 	await EnsureAppDatabaseReady();

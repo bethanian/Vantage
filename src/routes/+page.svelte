@@ -15,26 +15,24 @@
 
 	let { data }: { data: PageData } = $props();
 
-	const Campaigns = $derived(data.Campaigns);
 	const ApiCredentials = $derived(data.ApiCredentials);
 	const AppSettings = $derived(data.AppSettings);
 	const ClipTasks = $derived(data.ClipTasks);
 	const ContentItems = $derived(data.ContentItems);
-	const Creators = $derived(data.Creators);
 	const PlatformAccounts = $derived(data.PlatformAccounts);
-	const SavedSearches = $derived(data.SavedSearches);
+	const SavedSearches = $derived(data.SavedSearches.filter((Search) => !/whop|clipping\.?net/i.test(Search.Query)));
 	const SyncRuns = $derived(data.SyncRuns);
 	const ActivityEvents = $derived(data.ActivityEvents);
 
-	const Views: ViewName[] = ['Feed', 'Creators', 'Queue', 'Campaigns', 'Accounts'];
-	const FeedFilters = ['All', 'Live now', 'Whop', 'Clipping.net', 'Not clipped'];
+	const Views: ViewName[] = ['Feed', 'Queue', 'Accounts'];
+	const FeedFilters = ['All', 'Live now', 'Videos', 'Streams', 'Not queued'];
 	const ContentStatusActions: { Status: ItemStatus; Icon: string; Label: string }[] = [
-		{ Status: 'Watched', Icon: 'ti-eye', Label: 'Mark watched' },
-		{ Status: 'Clipped', Icon: 'ti-scissors', Label: 'Mark clipped' },
+		{ Status: 'Watched', Icon: 'ti-eye', Label: 'Mark reviewed' },
 		{ Status: 'Rejected', Icon: 'ti-circle-x', Label: 'Reject' }
 	];
-	const QueueFilters = ['All', 'To upload', 'Editing', 'Done'];
-	const SortModes = ['Opportunity score', 'Recency', 'Creator', 'Engagement velocity'];
+	const QueueFilters = ['All', 'To Clip', 'Finished', 'Uploaded'];
+	const QueueStatuses = QueueFilters.filter((Filter) => Filter !== 'All');
+	const SortModes = ['Opportunity score', 'Newest first', 'Source name', 'Engagement velocity'];
 	const SidebarGroups = $derived([
 		{
 			Label: 'Platforms',
@@ -47,22 +45,11 @@
 			]
 		},
 		{
-			Label: 'Campaigns',
+			Label: 'Workflow',
 			Items: [
-				...Campaigns.map((Campaign) => ({
-					Label: Campaign.Name,
-					Icon: 'ti-tag',
-					Filter: Campaign.Name,
-					Count: ContentItems.filter((Item) => Item.Campaign === Campaign.Name).length
-				}))
-			]
-		},
-		{
-			Label: 'Status',
-			Items: [
-				{ Label: 'Unwatched', Icon: 'ti-circle-dot', Filter: 'New', Count: ContentItems.filter((Item) => Item.Status === 'New').length },
-				{ Label: 'In queue', Icon: 'ti-clock', Filter: 'Queue', Count: ClipTasks.length },
-				{ Label: 'Uploaded', Icon: 'ti-check', Filter: 'Uploaded', Count: ContentItems.filter((Item) => Item.Status === 'Uploaded').length }
+				{ Label: 'Fresh', Icon: 'ti-sparkles', Filter: 'New', Count: ContentItems.filter((Item) => Item.Status === 'New').length },
+				{ Label: 'Queued sources', Icon: 'ti-list-check', Filter: 'Queue', Count: ClipTasks.length },
+				{ Label: 'Rejected', Icon: 'ti-circle-x', Filter: 'Rejected', Count: ContentItems.filter((Item) => Item.Status === 'Rejected').length }
 			]
 		}
 	]);
@@ -73,9 +60,7 @@
 	let SourceSearch = $state('');
 	let ActiveQueueFilter = $state('All');
 	let SortMode = $state(SortModes[0]);
-	let SelectedCreatorName = $state(InitialCreatorName());
 	let QueueState = $state<ClipTask[]>(InitialQueueState());
-	let EditableNotes = $state<Record<string, string>>(InitialNotes());
 	let IsSyncingYoutube = $state(false);
 	let IsSyncingTwitch = $state(false);
 	let IsSyncingKick = $state(false);
@@ -84,30 +69,23 @@
 	let ActorName = $state('');
 	let ActorDraft = $state('');
 	let NeedsActor = $state(true);
+	let SelectedFeedItemId = $state<number | null>(null);
+	let ShowManualQueueForm = $state(false);
 
-	const SelectedCreator = $derived(
-		Creators.find((Creator) => Creator.Name === SelectedCreatorName) ?? Creators[0]
-	);
 	const LiveCount = $derived(ContentItems.filter((Item) => Item.Live).length);
-	const Earnings = $derived(Campaigns.reduce((Total, Campaign) => Total + Campaign.Earned, 0));
-	const EarningsGoal = $derived(Campaigns.reduce((Total, Campaign) => Total + Campaign.Goal, 0));
-	const AverageScore = $derived(ContentItems.length ? Math.round(ContentItems.reduce((Total, Item) => Total + Item.Score, 0) / ContentItems.length) : 0);
-	const UploadedCount = $derived(QueueState.filter((Task) => Object.values(Task.UploadUrls).some(Boolean) || Task.Status === 'Done').length);
 	const HandledCount = $derived(ContentItems.filter((Item) => ['Watched', 'Clipped', 'Uploaded', 'Rejected'].includes(Item.Status)).length);
-	const ClippedCount = $derived(QueueState.length + ContentItems.filter((Item) => ['Clipped', 'Uploaded'].includes(Item.Status)).length);
-	const UploadPlatformStats = $derived(
-		[
-			{ Platform: 'TikTok' as const, Key: 'TikTok' as const },
-			{ Platform: 'YouTube' as const, Key: 'Shorts' as const },
-			{ Platform: 'Instagram' as const, Key: 'Reels' as const }
-		].map(({ Platform, Key }) => ({
-			Platform,
-			Uploads: QueueState.filter((Task) => Boolean(Task.UploadUrls[Key])).length,
-			Queued: QueueState.filter((Task) => Task.Targets[Key]).length
-		}))
-	);
+	const FreshCount = $derived(ContentItems.filter((Item) => Item.Status === 'New').length);
+	const FinishedCount = $derived(QueueState.filter((Task) => Task.Status === 'Finished').length);
+	const UploadedCount = $derived(QueueState.filter((Task) => NormalizeQueueStatus(Task.Status) === 'Uploaded').length);
+	const ActiveSourceCount = $derived(PlatformAccounts.filter((Account) => Account.Connected || Account.LastSyncedAt).length);
+	const QueueCreatorOptions = $derived.by(() => {
+		const Names = new Set<string>();
+		for (const Account of PlatformAccounts) Names.add(Account.Creator);
+		for (const Item of ContentItems) Names.add(Item.Creator);
+		for (const Task of QueueState) Names.add(Task.Creator);
+		return [...Names].sort((A, B) => A.localeCompare(B));
+	});
 	const LatestSync = $derived(SyncRuns.at(-1));
-	const SelectedCampaign = $derived(Campaigns.find((Campaign) => Campaign.Name === SelectedCreator.Campaign));
 	const FeedItems = $derived.by(() => {
 		const Filtered = ContentItems.filter(
 			(Item) =>
@@ -116,12 +94,13 @@
 				MatchesSearch(Item, FeedSearch)
 		);
 		return [...Filtered].sort((A, B) => {
-			if (SortMode === 'Creator') return A.Creator.localeCompare(B.Creator);
-			if (SortMode === 'Recency') return B.Id - A.Id;
+			if (SortMode === 'Source name') return A.Creator.localeCompare(B.Creator);
+			if (SortMode === 'Newest first') return B.Id - A.Id;
 			return B.Score - A.Score;
 		});
 	});
 	const LeadItems = $derived(FeedItems.slice(0, 3));
+	const SelectedFeedItem = $derived(FeedItems.find((Item) => Item.Id === SelectedFeedItemId) ?? FeedItems[0]);
 	const QueueItems = $derived(QueueState.filter((Task) => MatchesQueueFilter(Task, ActiveQueueFilter)));
 	const SourceAccounts = $derived(PlatformAccounts.filter((Account) => MatchesSourceSearch(Account)));
 	const SourceGroups = $derived.by(() => {
@@ -129,14 +108,11 @@
 		for (const Account of SourceAccounts) Groups.set(Account.Platform, [...(Groups.get(Account.Platform) ?? []), Account]);
 		return [...Groups.entries()].map(([Platform, Accounts]) => ({ Platform, Accounts }));
 	});
-	const CreatorItems = $derived(
-		ContentItems.filter((Item) => Item.Creator === SelectedCreator.Name).slice(0, 5)
-	);
 	const ScoreWeights = $derived([
 		{ Key: 'ScoreRecencyWeight', Label: 'Recency', Value: AppSettings.ScoreRecencyWeight },
 		{ Key: 'ScoreEngagementWeight', Label: 'Engagement', Value: AppSettings.ScoreEngagementWeight },
 		{ Key: 'ScorePlatformWeight', Label: 'Platform fit', Value: AppSettings.ScorePlatformWeight },
-		{ Key: 'ScoreCampaignWeight', Label: 'Campaign fit', Value: AppSettings.ScoreCampaignWeight },
+		{ Key: 'ScoreCampaignWeight', Label: 'Source fit', Value: AppSettings.ScoreCampaignWeight },
 		{ Key: 'ScoreTitleWeight', Label: 'Title intent', Value: AppSettings.ScoreTitleWeight },
 		{ Key: 'ScoreStatusWeight', Label: 'Status penalty', Value: AppSettings.ScoreStatusWeight }
 	]);
@@ -154,9 +130,11 @@
 	function MatchesFeedFilter(Item: ContentItem, Filter: string) {
 		if (Filter === 'All') return true;
 		if (Filter === 'Live now') return Item.Live;
-		if (Filter === 'Not clipped') return !['Clipped', 'Uploaded'].includes(Item.Status);
+		if (Filter === 'Videos') return ['Upload', 'VOD', 'Clip'].includes(Item.Kind);
+		if (Filter === 'Streams') return Item.Kind.toLowerCase().includes('stream');
+		if (Filter === 'Not queued') return !QueueState.some((Task) => Task.SourceUrl && Task.SourceUrl === Item.SourceUrl);
 		if (Filter === 'Queue') return QueueState.some((Task) => Task.Creator === Item.Creator);
-		return Item.Platform === Filter || Item.Campaign === Filter || Item.Status === Filter;
+		return Item.Platform === Filter || Item.Status === Filter;
 	}
 
 	function PlatformCount(Platform: Platform) {
@@ -166,7 +144,7 @@
 	function MatchesSearch(Item: ContentItem, Query: string) {
 		const Search = Query.trim().toLowerCase();
 		if (!Search) return true;
-		return [Item.Creator, Item.Platform, Item.Campaign, Item.Kind, Item.Status, Item.Title, Item.Metric]
+		return [Item.Creator, Item.Platform, Item.Kind, Item.Status, Item.Title, Item.Metric, Item.SourceUrl ?? '']
 			.join(' ')
 			.toLowerCase()
 			.includes(Search);
@@ -174,8 +152,13 @@
 
 	function MatchesQueueFilter(Task: ClipTask, Filter: string) {
 		if (Filter === 'All') return true;
-		if (Filter === 'To upload') return Task.Status !== 'Done';
-		return Task.Status === Filter;
+		return NormalizeQueueStatus(Task.Status) === Filter;
+	}
+
+	function NormalizeQueueStatus(Status: string) {
+		if (Status === 'Done') return 'Finished';
+		if (Status === 'To upload' || Status === 'Editing' || Status === 'Uploading' || Status === 'Watched' || Status === 'To clip') return 'To Clip';
+		return QueueStatuses.includes(Status) ? Status : 'To Clip';
 	}
 
 	function MatchesSourceSearch(Account: PlatformAccount) {
@@ -187,10 +170,6 @@
 			.includes(Search);
 	}
 
-	function InitialCreatorName() {
-		return data.Creators[0]?.Name ?? '';
-	}
-
 	function InitialQueueState() {
 		return data.ClipTasks.map((Task) => ({
 			...Task,
@@ -199,13 +178,20 @@
 		}));
 	}
 
-	function InitialNotes() {
-		return Object.fromEntries(data.Creators.map((Creator) => [Creator.Name, Creator.Notes]));
-	}
-
 	function SetSidebarFilter(Filter: string) {
 		ActiveView = 'Feed';
 		ActiveFeedFilter = Filter;
+	}
+
+	function SelectFeedItem(Item: ContentItem) {
+		SelectedFeedItemId = Item.Id;
+	}
+
+	function IsQueued(Item: ContentItem) {
+		return QueueState.some((Task) => {
+			if (Item.SourceUrl && Task.SourceUrl) return Task.SourceUrl === Item.SourceUrl;
+			return Task.Creator === Item.Creator && Task.Source === Item.Title;
+		});
 	}
 
 	function ScoreClass(Score: number) {
@@ -223,10 +209,6 @@
 			Instagram: 'ti-brand-instagram',
 			X: 'ti-brand-x'
 		}[Platform];
-	}
-
-	function UploadUrl(Task: ClipTask, Target: string) {
-		return Task.UploadUrls[Target as keyof ClipTask['UploadUrls']] ?? '';
 	}
 
 	function PushToast(Message: string, Kind: ToastKind = 'Success') {
@@ -306,15 +288,6 @@
 		}
 	}
 
-	async function SaveCreatorNotes(CreatorName: string) {
-		const Response = await fetch(`/api/creators/${encodeURIComponent(CreatorName)}/notes`, {
-			method: 'PATCH',
-			headers: { 'content-type': 'application/json', 'x-vantage-actor': ActorName || ActorDraft || 'Someone' },
-			body: JSON.stringify({ Notes: EditableNotes[CreatorName] ?? '' })
-		});
-		PushToast(Response.ok ? 'Notes saved' : 'Notes failed', Response.ok ? 'Success' : 'Error');
-	}
-
 	async function SyncYoutube() {
 		IsSyncingYoutube = true;
 		try {
@@ -367,7 +340,7 @@
 </script>
 
 <svelte:head>
-	<title>Vantage - Creator Intelligence</title>
+	<title>Vantage - Social Feed Queue</title>
 	<link rel="preconnect" href="https://fonts.googleapis.com" />
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
 	<link
@@ -428,12 +401,12 @@
 			<section class="View">
 				<div class="ConnectBanner">
 					<i class="ti ti-plug-connected"></i>
-					<span>YouTube, TikTok, and Instagram are connected. Source tracking starts with Kick, Twitch, and YouTube.</span>
+					<span>Sync social sources, scan fresh posts and streams, then queue only the clips worth working.</span>
 					<button onclick={() => (ActiveView = 'Accounts')}>Manage accounts</button>
 				</div>
 
 				<div class="Subheader">
-					<span class="SubheaderTitle">Today's feed</span>
+					<span class="SubheaderTitle">Fresh feed</span>
 					{#each FeedFilters as Filter}
 						<button
 							class:Active={ActiveFeedFilter === Filter}
@@ -446,7 +419,7 @@
 					<div class="SubheaderSpacer"></div>
 					<div class="SearchWrap">
 						<i class="ti ti-search"></i>
-						<input bind:value={FeedSearch} aria-label="Search feed" placeholder="Search creator, term, campaign" />
+						<input bind:value={FeedSearch} aria-label="Search feed" placeholder="Search source, title, platform, link" />
 						{#if FeedSearch}
 							<button aria-label="Clear search" onclick={() => (FeedSearch = '')}>
 								<i class="ti ti-x"></i>
@@ -484,7 +457,7 @@
 						<div class="LeadGrid">
 							{#each LeadItems as Item}
 								<div class="LeadCell">
-									<button class="LeadMain" onclick={() => (SelectedCreatorName = Item.Creator)}>
+									<button class:Selected={SelectedFeedItem?.Id === Item.Id} class="LeadMain" onclick={() => SelectFeedItem(Item)}>
 										<div class="LeadMedia">
 											{#if Item.ThumbnailUrl}
 												<img src={Item.ThumbnailUrl} alt="" loading="lazy" />
@@ -495,7 +468,6 @@
 										<div class="Eyebrow">
 											<i class={`ti ${PlatformIcon(Item.Platform)}`}></i>{Item.Platform} / {Item.Kind}
 											{#if Item.Live}<span class="Tag LiveTag">live</span>{/if}
-											{#if Item.Campaign !== 'Organic'}<span class="Tag CampaignTag">{Item.Campaign}</span>{/if}
 										</div>
 										<h2>{Item.Creator}: {Item.Title}</h2>
 										<p>{Item.Metric} / {Item.Age}{Item.Velocity ? ` / ${Item.Velocity} velocity` : ''}</p>
@@ -524,8 +496,8 @@
 								<span>{ActiveFeedFilter}</span>
 							</div>
 							{#each FeedItems as Item, Index}
-								<div class="FeedRow">
-									<button class="FeedMain" onclick={() => (SelectedCreatorName = Item.Creator)}>
+								<div class:Selected={SelectedFeedItem?.Id === Item.Id} class="FeedRow">
+									<button class="FeedMain" onclick={() => SelectFeedItem(Item)}>
 										<span class="RowNum">{Index + 1}</span>
 										<span class="RowThumb">
 											{#if Item.ThumbnailUrl}
@@ -539,9 +511,8 @@
 											<span class="RowTitle">{Item.Title}</span>
 											<span class="RowMeta">
 												{Item.Age} / {Item.Kind} / {Item.Metric}
-												<span class="Tag">{Item.Status}</span>
+												<span class="Tag">{IsQueued(Item) ? 'Queued' : Item.Status}</span>
 												{#if LatestAction(Item.LastAction, Item.LastActionBy)}<span class="ActionTag">{LatestAction(Item.LastAction, Item.LastActionBy)}</span>{/if}
-												{#if Item.Campaign !== 'Organic'}<span class="Tag CampaignTag">{Item.Campaign}</span>{/if}
 											</span>
 										</span>
 										<span class={`RowScore ${ScoreClass(Item.Score)}`}>{Item.Score}</span>
@@ -560,8 +531,8 @@
 									</div>
 									<form method="POST" action="?/AddContentToQueue" class="QueueSourceForm" use:enhance={FormFeedback('Queue item')}>
 										<input type="hidden" name="ContentId" value={Item.Id} />
-										<button aria-label={`Queue ${Item.Title}`}>
-											<i class="ti ti-list-plus"></i>
+										<button disabled={IsQueued(Item)} aria-label={`Queue ${Item.Title}`}>
+											<i class={`ti ${IsQueued(Item) ? 'ti-check' : 'ti-list-plus'}`}></i>
 										</button>
 									</form>
 								</div>
@@ -575,13 +546,57 @@
 					</div>
 
 					<aside class="RightPanel">
-						<div class="PanelSection">
+						<div class="SelectedSourceCard">
+							{#if SelectedFeedItem}
+								<div class="SelectedMedia">
+									{#if SelectedFeedItem.ThumbnailUrl}
+										<img src={SelectedFeedItem.ThumbnailUrl} alt="" loading="lazy" />
+									{:else}
+										<i class={`ti ${PlatformIcon(SelectedFeedItem.Platform)}`}></i>
+									{/if}
+								</div>
+								<div class="SelectedMeta">
+									<span><i class={`ti ${PlatformIcon(SelectedFeedItem.Platform)}`}></i>{SelectedFeedItem.Platform} / {SelectedFeedItem.Kind}</span>
+									<h2>{SelectedFeedItem.Title}</h2>
+									<p>{SelectedFeedItem.Creator} / {SelectedFeedItem.Metric} / {SelectedFeedItem.Age}</p>
+								</div>
+								<div class="SelectedFacts">
+									<div><span>Score</span><strong>{SelectedFeedItem.Score}</strong></div>
+									<div><span>Status</span><strong>{IsQueued(SelectedFeedItem) ? 'Queued' : SelectedFeedItem.Status}</strong></div>
+								</div>
+								<div class="SelectedActions">
+									{#if SelectedFeedItem.SourceUrl}
+										<a class="PrimaryButton" href={SelectedFeedItem.SourceUrl} target="_blank" rel="noreferrer">
+											<i class="ti ti-external-link"></i>Open source
+										</a>
+									{/if}
+									<form method="POST" action="?/AddContentToQueue" use:enhance={FormFeedback('Queue item')}>
+										<input type="hidden" name="ContentId" value={SelectedFeedItem.Id} />
+										<button class="PrimaryButton" disabled={IsQueued(SelectedFeedItem)}>
+											<i class={`ti ${IsQueued(SelectedFeedItem) ? 'ti-check' : 'ti-list-plus'}`}></i>
+											{IsQueued(SelectedFeedItem) ? 'Queued' : 'Queue to clip'}
+										</button>
+									</form>
+								</div>
+								<div class="SelectedNote">
+									<i class="ti ti-info-circle"></i>
+									<span>{SelectedFeedItem.SourceUrl ? SelectedFeedItem.SourceUrl : 'No source link saved yet. Sync or update this account for direct source links.'}</span>
+								</div>
+							{:else}
+								<div class="EmptyState MiniEmpty">
+									<i class="ti ti-inbox"></i>
+									<span>Sync sources to populate the feed.</span>
+								</div>
+							{/if}
+						</div>
+
+						<div class="PanelSection CompactStats">
 							<div class="PanelLabel">Workflow</div>
 							<div class="StatGrid">
-								<div><span>Clips made</span><strong>{ClippedCount}</strong></div>
-								<div><span>Uploads out</span><strong>{UploadedCount}</strong></div>
-								<div><span>Avg score</span><strong>{AverageScore}</strong></div>
-								<div><span>In queue</span><strong>{QueueState.length}</strong></div>
+								<div><span>Fresh</span><strong>{FreshCount}</strong></div>
+								<div><span>Queued</span><strong>{QueueState.length}</strong></div>
+								<div><span>Finished</span><strong>{FinishedCount}</strong></div>
+								<div><span>Uploaded</span><strong>{UploadedCount}</strong></div>
 							</div>
 						</div>
 						<div class="PanelSection">
@@ -599,19 +614,14 @@
 						</div>
 						<div class="PanelSection">
 							<div class="PanelLabel">
-								Clip queue
+								Active queue
 								<button onclick={() => (ActiveView = 'Queue')}>view all</button>
 							</div>
 							{#each QueueState.slice(0, 3) as Task}
 								<div class="QueueCard">
 									<div class="QueueCreator">{Task.Creator} / {Task.Platform}</div>
 									<div class="QueueTitle">{Task.Source}</div>
-									<div class="QueueTimestamp">{Task.Timestamp}</div>
-									<div class="TaskTargets">
-										{#each Object.entries(Task.Targets) as [Target, Done]}
-											<span class:Done>{Target}{Done ? ' ok' : ''}</span>
-										{/each}
-									</div>
+									<div class="QueueTimestamp">{NormalizeQueueStatus(Task.Status)} / {Task.LastActionBy ? `added by ${Task.LastActionBy}` : Task.Timestamp}</div>
 								</div>
 							{:else}
 								<div class="EmptyState MiniEmpty">
@@ -621,97 +631,19 @@
 							{/each}
 						</div>
 						<div class="RevenueBlock">
-							<div class="PanelLabel">Campaign earnings</div>
-							<div class="Revenue">${Earnings}</div>
-							<div class="Muted">{Campaigns.length} active campaigns</div>
-							<div class="ScoreBar"><span style={`width:${EarningsGoal ? Math.min(100, (Earnings / EarningsGoal) * 100) : 0}%`}></span></div>
-							<div class="GoalLine"><span>${Earnings} earned</span><span>${EarningsGoal} goal</span></div>
+							<div class="PanelLabel">Source coverage</div>
+							<div class="Revenue">{ActiveSourceCount}/{PlatformAccounts.length}</div>
+							<div class="Muted">synced source accounts</div>
+							<div class="ScoreBar"><span style={`width:${PlatformAccounts.length ? (ActiveSourceCount / PlatformAccounts.length) * 100 : 0}%`}></span></div>
+							<div class="GoalLine"><span>{HandledCount} reviewed</span><span>{ContentItems.length} feed items</span></div>
 						</div>
 					</aside>
-				</div>
-			</section>
-		{:else if ActiveView === 'Creators'}
-			<section class="View">
-				<div class="CreatorHeader">
-					<div class="CreatorAvatar">{SelectedCreator.Initial}</div>
-					<div class="CreatorMeta">
-						<select bind:value={SelectedCreatorName} class="CreatorSelect" aria-label="Creator">
-							{#each Creators as Creator}<option>{Creator.Name}</option>{/each}
-						</select>
-						<div class="CreatorPlatforms">
-							{#each SelectedCreator.Platforms as Platform}
-								<span><i class={`ti ${PlatformIcon(Platform)}`}></i>{Platform}</span>
-							{/each}
-							<span>{SelectedCreator.Campaign}</span>
-						</div>
-					</div>
-					<div class="CreatorStats">
-						<div><strong>{SelectedCreator.LiveViewers}</strong><span>live viewers</span></div>
-						<div><strong>{SelectedCreator.Followers}</strong><span>followers</span></div>
-						<div><strong>{SelectedCreator.AverageScore}</strong><span>avg score</span></div>
-						<div><strong>{SelectedCreator.ClipsMade}</strong><span>clips made</span></div>
-					</div>
-					<form method="POST" action="?/DeleteCreator" class="InlineDelete HeaderDelete" use:enhance={FormFeedback('Creator')}>
-						<input type="hidden" name="Name" value={SelectedCreator.Name} />
-						<button aria-label={`Delete ${SelectedCreator.Name}`}>
-							<i class="ti ti-trash"></i>Delete
-						</button>
-					</form>
-				</div>
-				<div class="PageScroll">
-					<form method="POST" action="?/AddCreator" class="QuickForm" use:enhance={FormFeedback('Creator')}>
-						<input name="Name" placeholder="Creator name" required />
-						<input name="Platforms" placeholder="Platforms: Kick, Twitch" />
-						<input name="Campaign" placeholder="Campaign" />
-						<input name="Followers" placeholder="Followers" />
-						<button class="PrimaryButton"><i class="ti ti-plus"></i>Add creator</button>
-					</form>
-					<form method="POST" action="?/UpdateCreator" class="QuickForm CreatorEditForm" use:enhance={FormFeedback('Creator')}>
-						<input type="hidden" name="Name" value={SelectedCreator.Name} />
-						<input name="Platforms" value={SelectedCreator.Platforms.join(', ')} aria-label="Platforms" />
-						<input name="Campaign" value={SelectedCreator.Campaign} aria-label="Campaign" />
-						<input name="LiveViewers" value={SelectedCreator.LiveViewers} aria-label="Live viewers" />
-						<input name="Followers" value={SelectedCreator.Followers} aria-label="Followers" />
-						<input name="AverageScore" type="number" min="0" max="100" value={SelectedCreator.AverageScore} aria-label="Average score" />
-						<input name="ClipsMade" type="number" min="0" value={SelectedCreator.ClipsMade} aria-label="Clips made" />
-						<button class="PrimaryButton"><i class="ti ti-device-floppy"></i>Save creator</button>
-					</form>
-					{#if SelectedCampaign}
-						<div class="CreatorRuleSummary">
-							<div class="SectionHead"><span>{SelectedCampaign.Name} rules</span><span>{SelectedCampaign.Rate}</span></div>
-							<div class="CampaignRules">
-								<div><span>Allowed</span><p>{SelectedCampaign.Allowed.join(', ')}</p></div>
-								<div><span>Rules</span><p>{SelectedCampaign.Rules || 'No campaign rules saved.'}</p></div>
-								<div><span>Hook</span><p>{SelectedCampaign.HookRules || 'No hook guidance saved.'}</p></div>
-								<div><span>Banned</span><p>{SelectedCampaign.BannedTerms || 'No banned terms saved.'}</p></div>
-							</div>
-						</div>
-					{/if}
-					<div class="SectionHead"><span>Recent content</span></div>
-					{#each CreatorItems as Item, Index}
-						<div class="FeedRow Static">
-							<span class="RowNum">{Index + 1}</span>
-							<span class="RowBody">
-								<span class="RowCreator">{Item.Platform} / {Item.Kind}</span>
-								<span class="RowTitle">{Item.Title}</span>
-								<span class="RowMeta">{Item.Age} / {Item.Metric}</span>
-							</span>
-							<span class={`RowScore ${ScoreClass(Item.Score)}`}>{Item.Score}</span>
-						</div>
-					{/each}
-					<label class="NotesCard">
-						<span>Notes, hooks, timestamps</span>
-						<textarea
-							bind:value={EditableNotes[SelectedCreator.Name]}
-							onblur={() => SaveCreatorNotes(SelectedCreator.Name)}
-						></textarea>
-					</label>
 				</div>
 			</section>
 		{:else if ActiveView === 'Queue'}
 			<section class="View">
 				<div class="Subheader">
-					<span class="SubheaderTitle">Clip queue</span>
+					<span class="SubheaderTitle">Queue</span>
 					{#each QueueFilters as Filter}
 						<button
 							class:Active={ActiveQueueFilter === Filter}
@@ -722,202 +654,83 @@
 						</button>
 					{/each}
 					<div class="SubheaderSpacer"></div>
+					<button class="Chip" class:Active={ShowManualQueueForm} onclick={() => (ShowManualQueueForm = !ShowManualQueueForm)}>
+						<i class="ti ti-plus"></i>Manual
+					</button>
 				</div>
-				<form method="POST" action="?/AddClipTask" class="QuickForm QueueForm" use:enhance={FormFeedback('Clip')}>
-					<select name="Creator" required>
-						{#each Creators as Creator}<option>{Creator.Name}</option>{/each}
-					</select>
-					<select name="Platform">
-						<option>Kick</option><option>Twitch</option><option>YouTube</option><option>TikTok</option>
-					</select>
-					<input name="Source" placeholder="Source moment" required />
-					<input name="SourceUrl" placeholder="Source URL" />
-					<input name="Timestamp" placeholder="1:24:33" />
-					<input name="Hook" placeholder="Hook idea" />
-					<input name="Score" type="number" min="0" max="100" placeholder="Score" />
-					<label><input name="TikTok" type="checkbox" checked />TT</label>
-					<label><input name="Shorts" type="checkbox" />YT</label>
-					<label><input name="Reels" type="checkbox" />IG</label>
-					<input name="TikTokUrl" placeholder="TikTok URL" />
-					<input name="ShortsUrl" placeholder="Shorts URL" />
-					<input name="ReelsUrl" placeholder="Reels URL" />
-					<button class="PrimaryButton"><i class="ti ti-plus"></i>Add clip</button>
-				</form>
-				<div class="TableWrap">
-					<table>
-						<thead>
-							<tr>
-								<th>#</th>
-								<th>Source</th>
-								<th>Timestamp</th>
-								<th>Hook idea</th>
-								<th>Platforms</th>
-								<th>Score</th>
-								<th>Status</th>
-								<th></th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each QueueItems as Task}
-								<tr>
-									<td>{Task.Id}</td>
-									<td>
-										<div class="QueueCreator">{Task.Creator} / {Task.Platform}</div>
-										<div>{Task.Source}</div>
-										{#if Task.SourceUrl}
-											<a class="QueueSourceLink" href={Task.SourceUrl} target="_blank" rel="noreferrer">open source</a>
-										{/if}
-										{#if LatestAction(Task.LastAction, Task.LastActionBy)}
-											<div class="ActionLine">{LatestAction(Task.LastAction, Task.LastActionBy)}</div>
-										{/if}
-									</td>
-									<td class="QueueTimestamp">{Task.Timestamp}</td>
-									<td class="Hook">"{Task.Hook}"</td>
-									<td>
-										<div class="TaskTargets">
-											{#each Object.entries(Task.Targets) as [Target, Done]}
-												{#if UploadUrl(Task, Target)}
-													<a href={UploadUrl(Task, Target)} target="_blank" rel="noreferrer">{Target}</a>
-												{:else}
-													<span class:Done>{Target}</span>
-												{/if}
-											{/each}
-										</div>
-									</td>
-									<td><span class={`RowScore ${ScoreClass(Task.Score)}`}>{Task.Score}</span></td>
-									<td>
-										<select value={Task.Status} onchange={(Event) => UpdateTaskStatus(Task, Event.currentTarget.value)}>
-											{#each QueueFilters.filter((Filter) => Filter !== 'All') as Status}
-												<option>{Status}</option>
-											{/each}
-											<option>Uploading</option>
-											<option>Watched</option>
-											<option>To clip</option>
-										</select>
-									</td>
-									<td>
-										<div class="RowActions">
-											<button aria-label={`Edit clip task ${Task.Id}`} onclick={() => (EditingTaskId = EditingTaskId === Task.Id ? null : Task.Id)}>
-												<i class="ti ti-edit"></i>
-											</button>
-											<form method="POST" action="?/DeleteClipTask" class="InlineDelete TableDelete" use:enhance={FormFeedback('Clip')}>
-												<input type="hidden" name="Id" value={Task.Id} />
-												<button aria-label={`Delete clip task ${Task.Id}`}><i class="ti ti-trash"></i></button>
-											</form>
-										</div>
-									</td>
-								</tr>
-								{#if EditingTaskId === Task.Id}
-									<tr class="EditRow">
-										<td></td>
-										<td colspan="7">
-											<form method="POST" action="?/UpdateClipTask" class="InlineEditForm" use:enhance={FormFeedback('Clip')}>
-											<input type="hidden" name="Id" value={Task.Id} />
-											<input name="Source" value={Task.Source} aria-label="Source" />
-											<input name="SourceUrl" value={Task.SourceUrl ?? ''} aria-label="Source URL" />
-											<input name="Timestamp" value={Task.Timestamp} aria-label="Timestamp" />
-											<input name="Hook" value={Task.Hook} aria-label="Hook" />
-											<input name="Score" type="number" min="0" max="100" value={Task.Score} aria-label="Score" />
-											<select name="Status" value={Task.Status} aria-label="Status">
-												<option>To upload</option><option>Editing</option><option>Done</option><option>Uploading</option><option>Watched</option><option>To clip</option>
-											</select>
-											<label><input name="TikTok" type="checkbox" checked={Task.Targets.TikTok} />TT</label>
-											<label><input name="Shorts" type="checkbox" checked={Task.Targets.Shorts} />YT</label>
-											<label><input name="Reels" type="checkbox" checked={Task.Targets.Reels} />IG</label>
-											<input name="TikTokUrl" value={Task.UploadUrls.TikTok} aria-label="TikTok upload URL" />
-											<input name="ShortsUrl" value={Task.UploadUrls.Shorts} aria-label="Shorts upload URL" />
-											<input name="ReelsUrl" value={Task.UploadUrls.Reels} aria-label="Reels upload URL" />
-											<button class="PrimaryButton"><i class="ti ti-device-floppy"></i>Save</button>
-											</form>
-										</td>
-									</tr>
-								{/if}
-							{:else}
-								<tr>
-									<td colspan="8">
-										<div class="EmptyState InlineEmpty">
-											<i class="ti ti-inbox"></i>
-											<span>No queue items match this filter.</span>
-										</div>
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			</section>
-		{:else if ActiveView === 'Campaigns'}
-			<section class="View PageScroll">
-				<div class="PageTitleRow">
-					<div>
-						<h1>Campaigns</h1>
-						<p>Active clipping agreements and payout tracking.</p>
-					</div>
-				</div>
-				<form method="POST" action="?/AddCampaign" class="QuickForm" use:enhance={FormFeedback('Campaign')}>
-					<input name="Name" placeholder="Campaign name" required />
-					<input name="Rate" placeholder="$4 / 1k views" />
-					<input name="Niche" placeholder="Niche" />
-					<input name="Goal" type="number" min="1" placeholder="Goal" />
-					<input name="Allowed" placeholder="TikTok, YouTube Shorts, Instagram Reels" />
-					<input name="Rules" placeholder="Campaign rules" />
-					<input name="HookRules" placeholder="Hook rules" />
-					<input name="BannedTerms" placeholder="Banned terms" />
-					<button class="PrimaryButton"><i class="ti ti-plus"></i>Add campaign</button>
-				</form>
-				<div class="CampaignGrid">
-					{#each Campaigns as Campaign}
-						<div class="CampaignCard">
-							<div class="CampaignTop">
+				{#if ShowManualQueueForm}
+					<form method="POST" action="?/AddClipTask" class="QuickForm QueueForm" use:enhance={FormFeedback('Clip')}>
+						<select name="Creator" required>
+							{#each QueueCreatorOptions as Creator}<option>{Creator}</option>{/each}
+						</select>
+						<select name="Platform">
+							<option>Kick</option><option>Twitch</option><option>YouTube</option><option>TikTok</option>
+						</select>
+						<input name="Source" placeholder="Source moment" required />
+						<input name="SourceUrl" placeholder="Source URL" />
+						<input name="Timestamp" placeholder="Timestamp or note" />
+						<input name="Hook" placeholder="Hook idea" />
+						<input name="Score" type="number" min="0" max="100" placeholder="Score" />
+						<button class="PrimaryButton"><i class="ti ti-plus"></i>Add clip</button>
+					</form>
+				{/if}
+				<div class="QueueBoard">
+					{#each QueueItems as Task}
+						<article class="QueueWorkCard">
+							<div class="QueueWorkTop">
 								<div>
-									<h2>{Campaign.Name}</h2>
-									<p>{Campaign.State}</p>
+									<div class="QueueCreator"><i class={`ti ${PlatformIcon(Task.Platform)}`}></i>{Task.Platform} / {Task.Creator}</div>
+									<h2>{Task.Source}</h2>
 								</div>
-								<strong>${Campaign.Earned}<span> earned</span></strong>
+								<span class={`QueueStatusPill ${NormalizeQueueStatus(Task.Status).replace(' ', '')}`}>{NormalizeQueueStatus(Task.Status)}</span>
 							</div>
-							<div class="CampaignDetails">
-								<div><span>Rate</span><b>{Campaign.Rate}</b></div>
-								<div><span>Submitted</span><b>{Campaign.Submitted}</b></div>
-								<div><span>Niche</span><b>{Campaign.Niche}</b></div>
+							<div class="QueueWorkMeta">
+								<span><i class="ti ti-clock"></i>{Task.Timestamp}</span>
+								<span><i class="ti ti-flame"></i>{Task.Score}</span>
+								<span><i class="ti ti-user"></i>{Task.LastActionBy ? `Added by ${Task.LastActionBy}` : 'Unassigned'}</span>
 							</div>
-							<div class="ScoreBar"><span style={`width:${(Campaign.Earned / Campaign.Goal) * 100}%`}></span></div>
-							<div class="GoalLine"><span>${Campaign.Earned} / ${Campaign.Goal}</span><span>{Math.round((Campaign.Earned / Campaign.Goal) * 100)}%</span></div>
-							<div class="Allowed">
-								{#each Campaign.Allowed as Platform}<span>{Platform}</span>{/each}
-							</div>
-							<div class="CampaignRules">
-								<div><span>Rules</span><p>{Campaign.Rules || 'No campaign rules saved.'}</p></div>
-								<div><span>Hook</span><p>{Campaign.HookRules || 'No hook guidance saved.'}</p></div>
-								<div><span>Banned</span><p>{Campaign.BannedTerms || 'No banned terms saved.'}</p></div>
-							</div>
-							<form method="POST" action="?/UpdateCampaign" class="CampaignEditForm" use:enhance={FormFeedback('Campaign')}>
-								<input type="hidden" name="Name" value={Campaign.Name} />
-								<input name="State" value={Campaign.State} aria-label="State" />
-								<input name="Rate" value={Campaign.Rate} aria-label="Rate" />
-								<input name="Niche" value={Campaign.Niche} aria-label="Niche" />
-								<input name="Earned" type="number" min="0" value={Campaign.Earned} aria-label="Earned" />
-								<input name="Goal" type="number" min="1" value={Campaign.Goal} aria-label="Goal" />
-								<input name="Submitted" type="number" min="0" value={Campaign.Submitted} aria-label="Submitted" />
-								<input name="Allowed" value={Campaign.Allowed.join(', ')} aria-label="Allowed platforms" />
-								<input name="Rules" value={Campaign.Rules} aria-label="Rules" />
-								<input name="HookRules" value={Campaign.HookRules} aria-label="Hook rules" />
-								<input name="BannedTerms" value={Campaign.BannedTerms} aria-label="Banned terms" />
-								<button class="PrimaryButton"><i class="ti ti-device-floppy"></i>Save</button>
-							</form>
-							<form method="POST" action="?/DeleteCampaign" class="InlineDelete" use:enhance={FormFeedback('Campaign')}>
-								<input type="hidden" name="Name" value={Campaign.Name} />
-								<button aria-label={`Delete ${Campaign.Name}`}>
-									<i class="ti ti-trash"></i>Delete
+							<p class="Hook">"{Task.Hook}"</p>
+							<div class="QueueWorkActions">
+								{#if Task.SourceUrl}
+									<a class="QueueSourceLink" href={Task.SourceUrl} target="_blank" rel="noreferrer">
+										<i class="ti ti-external-link"></i>Open source
+									</a>
+								{/if}
+								<select class={`StatusSelect ${NormalizeQueueStatus(Task.Status).replace(' ', '')}`} value={NormalizeQueueStatus(Task.Status)} onchange={(Event) => UpdateTaskStatus(Task, Event.currentTarget.value)}>
+									{#each QueueStatuses as Status}<option>{Status}</option>{/each}
+								</select>
+								<button class="IconButton" aria-label={`Edit clip task ${Task.Id}`} onclick={() => (EditingTaskId = EditingTaskId === Task.Id ? null : Task.Id)}>
+									<i class="ti ti-edit"></i>
 								</button>
-							</form>
+								<form method="POST" action="?/DeleteClipTask" class="InlineDelete TableDelete" use:enhance={FormFeedback('Clip')}>
+									<input type="hidden" name="Id" value={Task.Id} />
+									<button class="IconButton Danger" aria-label={`Delete clip task ${Task.Id}`}><i class="ti ti-trash"></i></button>
+								</form>
+							</div>
+							{#if LatestAction(Task.LastAction, Task.LastActionBy)}
+								<div class="ActionLine">{LatestAction(Task.LastAction, Task.LastActionBy)}</div>
+							{/if}
+							{#if EditingTaskId === Task.Id}
+								<form method="POST" action="?/UpdateClipTask" class="InlineEditForm" use:enhance={FormFeedback('Clip')}>
+									<input type="hidden" name="Id" value={Task.Id} />
+									<input name="Source" value={Task.Source} aria-label="Source" />
+									<input name="SourceUrl" value={Task.SourceUrl ?? ''} aria-label="Source URL" />
+									<input name="Timestamp" value={Task.Timestamp} aria-label="Timestamp" />
+									<input name="Hook" value={Task.Hook} aria-label="Hook" />
+									<input name="Score" type="number" min="0" max="100" value={Task.Score} aria-label="Score" />
+									<select name="Status" value={NormalizeQueueStatus(Task.Status)} aria-label="Status">
+										{#each QueueStatuses as Status}<option>{Status}</option>{/each}
+									</select>
+									<button class="PrimaryButton"><i class="ti ti-device-floppy"></i>Save</button>
+								</form>
+							{/if}
+						</article>
+					{:else}
+						<div class="EmptyState InlineEmpty">
+							<i class="ti ti-inbox"></i>
+							<span>No queue items match this filter.</span>
 						</div>
 					{/each}
-				</div>
-				<div class="MetricBand">
-					<div><span>Earned</span><strong>${Earnings}</strong></div>
-					<div><span>This month</span><strong>${Earnings}</strong></div>
-					<div><span>Total clips</span><strong>{ClippedCount}</strong></div>
-					<div><span>Total uploads</span><strong>{UploadedCount}</strong></div>
 				</div>
 			</section>
 		{:else}
@@ -927,23 +740,6 @@
 						<h1>Connected accounts</h1>
 						<p>Link clipping accounts for upload tracking, and source accounts for fresh content.</p>
 					</div>
-				</div>
-				<div class="SectionHead"><span>Your clipping platforms</span></div>
-				<div class="AccountGrid">
-					{#each UploadPlatformStats as Stat}
-						<div class="AccountCard">
-							<div class="AccountTop">
-								<div class="AccountIcon"><i class={`ti ${PlatformIcon(Stat.Platform)}`}></i></div>
-								<div><h2>{Stat.Platform}</h2><p>{Stat.Queued} queued targets</p></div>
-							</div>
-							<div class="AccountStats">
-								<div><strong>{Stat.Uploads}</strong><span>uploads</span></div>
-								<div><strong>{Stat.Queued}</strong><span>planned</span></div>
-								<div><strong>{QueueState.length ? Math.round((Stat.Uploads / QueueState.length) * 100) : 0}%</strong><span>coverage</span></div>
-							</div>
-							<span class={Stat.Uploads ? 'ConnectedText' : 'Chip'}>{Stat.Uploads ? 'Tracking' : 'No uploads yet'}</span>
-						</div>
-					{/each}
 				</div>
 				<div class="SectionHead"><span>Source platforms</span></div>
 				<div class="SourceActionRow">
@@ -995,7 +791,7 @@
 					</div>
 				</div>
 				<form method="POST" action="?/AddSourceAccount" class="QuickForm SourceAccountForm" use:enhance={FormFeedback('Source account')}>
-					<input name="Creator" placeholder="Creator name" required />
+					<input name="Creator" placeholder="Source name" required />
 					<select name="Platform" required>
 						<option>YouTube</option>
 						<option>Twitch</option>
@@ -1029,7 +825,7 @@
 										</div>
 										<form method="POST" action="?/UpdateSourceAccount" class="SourceAccountEditForm" use:enhance={FormFeedback('Source account')}>
 											<input type="hidden" name="Id" value={Account.Id} />
-											<input name="Creator" value={Account.Creator} aria-label="Creator" />
+											<input name="Creator" value={Account.Creator} aria-label="Source name" />
 											<select name="Platform" value={Account.Platform} aria-label="Platform">
 												<option>YouTube</option>
 												<option>Twitch</option>
@@ -1168,20 +964,46 @@
 		background: var(--Page);
 		color: var(--Ink);
 		font-family: 'DM Sans', sans-serif;
-		font-size: 13px;
+		font-size: 14px;
 		overflow: hidden;
 	}
 
 	button,
 	input,
 	select,
-	textarea {
+	:global(textarea) {
 		font: inherit;
 	}
 
 	button {
 		color: inherit;
 		cursor: pointer;
+		position: relative;
+		transition:
+			background-color 160ms ease,
+			border-color 160ms ease,
+			color 160ms ease,
+			opacity 160ms ease,
+			transform 160ms ease;
+	}
+
+	button:active {
+		transform: scale(0.97);
+	}
+
+	button::after {
+		background: currentColor;
+		border-radius: inherit;
+		content: '';
+		inset: 0;
+		opacity: 0;
+		pointer-events: none;
+		position: absolute;
+		transition: opacity 220ms ease;
+	}
+
+	button:active::after {
+		opacity: 0.08;
 	}
 
 	.Topnav {
@@ -1189,8 +1011,8 @@
 		background: var(--Ink);
 		display: flex;
 		gap: 2px;
-		height: 48px;
-		padding: 0 20px;
+		height: 44px;
+		padding: 0 14px;
 	}
 
 	.Wordmark {
@@ -1214,8 +1036,8 @@
 		color: #7a7870;
 		display: flex;
 		gap: 7px;
-		height: 48px;
-		padding: 0 13px;
+		height: 44px;
+		padding: 0 12px;
 	}
 
 	.NavLink.Active {
@@ -1293,7 +1115,7 @@
 
 	.Shell {
 		display: flex;
-		height: calc(100vh - 48px);
+		height: calc(100vh - 44px);
 	}
 
 	.Sidebar {
@@ -1302,8 +1124,8 @@
 		display: flex;
 		flex-direction: column;
 		overflow-y: auto;
-		padding: 18px 12px;
-		width: 220px;
+		padding: 12px 10px;
+		width: 196px;
 	}
 
 	.SidebarLabel,
@@ -1324,7 +1146,7 @@
 		display: flex;
 		justify-content: space-between;
 		margin-top: 3px;
-		padding: 8px 9px;
+		padding: 7px 8px;
 		text-align: left;
 		width: 100%;
 	}
@@ -1338,6 +1160,20 @@
 	.SidebarItem.Active,
 	.SidebarItem:hover {
 		background: var(--Page);
+		color: var(--Green);
+		transform: translateX(2px);
+	}
+
+	.SidebarItem i,
+	.PrimaryButton i,
+	.SyncButton i {
+		transition: color 160ms ease, transform 160ms ease;
+	}
+
+	.SidebarItem:hover i,
+	.PrimaryButton:hover i,
+	.SyncButton:hover i {
+		transform: translateX(2px);
 	}
 
 	.SidebarCount.Live {
@@ -1377,7 +1213,7 @@
 		background: var(--GreenSoft);
 		color: var(--Green);
 		font-size: 12px;
-		padding: 9px 22px;
+		padding: 8px 16px;
 	}
 
 	.ConnectBanner button,
@@ -1391,7 +1227,7 @@
 
 	.Subheader {
 		background: var(--Surface);
-		padding: 12px 22px;
+		padding: 9px 16px;
 	}
 
 	.SubheaderTitle {
@@ -1402,12 +1238,11 @@
 
 	.Chip,
 	.Subheader select,
-	table select,
 	.PrimaryButton,
 	.ConnectedText {
 		border: 1px solid var(--Rule);
 		border-radius: 6px;
-		padding: 5px 10px;
+		padding: 5px 9px;
 	}
 
 	.Chip {
@@ -1421,14 +1256,45 @@
 		color: var(--Page);
 	}
 
+	.Chip:hover,
+	.SaveSearchForm button:hover,
+	.RowTriageActions button:hover,
+	.TriageActions button:hover {
+		border-color: var(--Ink3);
+		color: var(--Green);
+		transform: translateY(-1px);
+	}
+
 	select,
 	input,
-	textarea {
+	:global(textarea) {
 		background: var(--Page);
 		border: 1px solid var(--Rule);
 		border-radius: 6px;
 		color: var(--Ink);
 		padding: 6px 9px;
+		transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+	}
+
+	select {
+		appearance: none;
+		background-image:
+			linear-gradient(45deg, transparent 50%, var(--Ink2) 50%),
+			linear-gradient(135deg, var(--Ink2) 50%, transparent 50%);
+		background-position:
+			calc(100% - 14px) 50%,
+			calc(100% - 9px) 50%;
+		background-size: 5px 5px, 5px 5px;
+		background-repeat: no-repeat;
+		padding-right: 28px;
+	}
+
+	input:focus,
+	select:focus,
+	:global(textarea:focus) {
+		border-color: color-mix(in srgb, var(--Green) 55%, var(--Rule));
+		box-shadow: 0 0 0 3px rgba(43, 92, 58, 0.1);
+		outline: none;
 	}
 
 	.SearchWrap {
@@ -1481,7 +1347,7 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 7px;
-		padding: 8px 22px;
+		padding: 7px 16px;
 	}
 
 	.SavedSearchRow span {
@@ -1515,20 +1381,20 @@
 	.ContentPanes {
 		display: grid;
 		flex: 1;
-		grid-template-columns: minmax(0, 1fr) 320px;
+		grid-template-columns: minmax(0, 1fr) 300px;
 		min-height: 0;
 	}
 
 	.Feed,
 	.PageScroll,
-	.TableWrap {
+	.QueueBoard {
 		overflow-y: auto;
-		padding: 22px;
+		padding: 14px;
 	}
 
 	.LeadGrid {
 		display: grid;
-		gap: 12px;
+		gap: 10px;
 		grid-template-columns: 1.15fr 1fr 1fr;
 		margin-bottom: 18px;
 	}
@@ -1538,7 +1404,6 @@
 	.AccountCard,
 	.NotesCard,
 	.QueueCard,
-	.MetricBand > div,
 	.PreferenceGrid label {
 		background: var(--Page);
 		border: 1px solid var(--Rule);
@@ -1550,6 +1415,10 @@
 		flex-direction: column;
 		overflow: hidden;
 		text-align: left;
+		transition:
+			border-color 180ms ease,
+			box-shadow 180ms ease,
+			transform 180ms ease;
 	}
 
 	.LeadMain {
@@ -1557,7 +1426,7 @@
 		border: 0;
 		display: block;
 		flex: 1;
-		padding: 18px;
+		padding: 14px;
 		text-align: left;
 		width: 100%;
 	}
@@ -1571,7 +1440,7 @@
 		display: flex;
 		font-size: 34px;
 		justify-content: center;
-		margin: -6px -6px 14px;
+		margin: -4px -4px 12px;
 		overflow: hidden;
 	}
 
@@ -1579,13 +1448,54 @@
 	.RowThumb img {
 		height: 100%;
 		object-fit: cover;
+		transition: transform 260ms ease;
 		width: 100%;
 	}
 
 	.LeadCell:hover,
 	.FeedRow:hover,
+	.FeedRow.Selected,
 	.QueueCard:hover {
 		border-color: var(--Ink3);
+		box-shadow: 0 10px 28px rgba(26, 25, 22, 0.08);
+		transform: translateY(-2px);
+	}
+
+	.LeadMain.Selected {
+		box-shadow: inset 0 0 0 2px rgba(43, 92, 58, 0.18);
+	}
+
+	.FeedRow {
+		position: relative;
+		transition:
+			background-color 180ms ease,
+			border-color 180ms ease,
+			box-shadow 180ms ease,
+			transform 180ms ease;
+	}
+
+	.FeedRow::before {
+		background: var(--Green);
+		content: '';
+		inset: 0 auto 0 0;
+		opacity: 0;
+		position: absolute;
+		transition: opacity 180ms ease, width 180ms ease;
+		width: 0;
+	}
+
+	.FeedRow.Selected {
+		background: var(--Page);
+	}
+
+	.FeedRow.Selected::before {
+		opacity: 1;
+		width: 3px;
+	}
+
+	.LeadCell:hover img,
+	.FeedRow:hover img {
+		transform: scale(1.045);
 	}
 
 	.Eyebrow,
@@ -1613,7 +1523,7 @@
 
 	.LeadCell h2 {
 		font-family: 'Fraunces', serif;
-		font-size: 23px;
+		font-size: 21px;
 		font-weight: 400;
 		line-height: 1.1;
 		margin-bottom: 10px;
@@ -1653,10 +1563,137 @@
 
 	.FeedList,
 	.PanelSection,
-	.RevenueBlock {
+	.RevenueBlock,
+	.SelectedSourceCard {
 		background: var(--Surface);
 		border: 1px solid var(--Rule);
 		border-radius: 8px;
+	}
+
+	.SelectedSourceCard {
+		display: grid;
+		gap: 12px;
+		margin-bottom: 14px;
+		overflow: hidden;
+		padding: 12px;
+	}
+
+	.SelectedMedia {
+		align-items: center;
+		aspect-ratio: 16 / 9;
+		background: var(--RuleSoft);
+		border-radius: 7px;
+		color: var(--Ink3);
+		display: flex;
+		font-size: 32px;
+		justify-content: center;
+		overflow: hidden;
+	}
+
+	.SelectedMedia img {
+		height: 100%;
+		object-fit: cover;
+		transition: transform 260ms ease;
+		width: 100%;
+	}
+
+	.SelectedSourceCard:hover .SelectedMedia img {
+		transform: scale(1.04);
+	}
+
+	.SelectedMeta {
+		display: grid;
+		gap: 6px;
+	}
+
+	.SelectedMeta span {
+		align-items: center;
+		color: var(--Ink3);
+		display: flex;
+		font-size: 10px;
+		gap: 6px;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+	}
+
+	.SelectedMeta h2 {
+		font-family: 'Fraunces', serif;
+		font-size: 21px;
+		font-weight: 400;
+		line-height: 1.08;
+	}
+
+	.SelectedMeta p,
+	.SelectedNote {
+		color: var(--Ink2);
+		font-size: 12px;
+		line-height: 1.35;
+	}
+
+	.SelectedFacts {
+		display: grid;
+		gap: 8px;
+		grid-template-columns: 74px 1fr;
+	}
+
+	.SelectedFacts div {
+		background: var(--Page);
+		border: 1px solid var(--RuleSoft);
+		border-radius: 7px;
+		padding: 8px;
+	}
+
+	.SelectedFacts span {
+		color: var(--Ink3);
+		display: block;
+		font-size: 10px;
+		text-transform: uppercase;
+	}
+
+	.SelectedFacts strong {
+		display: block;
+		font-family: 'Fraunces', serif;
+		font-size: 20px;
+		font-weight: 400;
+		margin-top: 2px;
+	}
+
+	.SelectedActions {
+		display: grid;
+		gap: 8px;
+		grid-template-columns: 1fr 1fr;
+	}
+
+	.SelectedActions form {
+		display: contents;
+	}
+
+	.SelectedActions .PrimaryButton {
+		justify-content: center;
+		width: 100%;
+	}
+
+	.SelectedActions .PrimaryButton:disabled,
+	.QueueSourceForm button:disabled {
+		background: var(--GreenSoft);
+		border-color: var(--GreenSoft);
+		color: var(--Green);
+		cursor: default;
+	}
+
+	.SelectedNote {
+		align-items: flex-start;
+		background: var(--Page);
+		border: 1px solid var(--RuleSoft);
+		border-radius: 7px;
+		display: flex;
+		gap: 8px;
+		padding: 8px;
+		word-break: break-word;
+	}
+
+	.CompactStats {
+		padding: 12px;
 	}
 
 	.SectionHead {
@@ -1779,11 +1816,153 @@
 	}
 
 	.QueueSourceLink {
+		align-items: center;
 		color: var(--Green);
-		display: inline-block;
+		display: inline-flex;
 		font-size: 11px;
+		gap: 5px;
 		margin-top: 4px;
 		text-decoration: none;
+	}
+
+	.QueueBoard {
+		display: grid;
+		gap: 10px;
+		grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+	}
+
+	.QueueWorkCard {
+		background: var(--Page);
+		border: 1px solid var(--Rule);
+		border-radius: 8px;
+		display: grid;
+		gap: 10px;
+		padding: 12px;
+		transition:
+			background-color 180ms ease,
+			border-color 180ms ease,
+			box-shadow 180ms ease,
+			transform 180ms ease;
+	}
+
+	.QueueWorkCard:hover {
+		border-color: var(--Ink3);
+		box-shadow: 0 10px 28px rgba(26, 25, 22, 0.08);
+		transform: translateY(-2px);
+	}
+
+	.QueueWorkTop,
+	.QueueWorkActions,
+	.QueueWorkMeta {
+		align-items: center;
+		display: flex;
+		gap: 8px;
+	}
+
+	.QueueWorkTop {
+		align-items: flex-start;
+		justify-content: space-between;
+	}
+
+	.QueueWorkTop h2 {
+		font-size: 15px;
+		font-weight: 600;
+		line-height: 1.25;
+		margin-top: 4px;
+	}
+
+	.QueueWorkMeta {
+		color: var(--Ink3);
+		flex-wrap: wrap;
+		font-size: 11px;
+	}
+
+	.QueueWorkMeta span {
+		align-items: center;
+		display: inline-flex;
+		gap: 4px;
+	}
+
+	.QueueWorkActions {
+		flex-wrap: wrap;
+	}
+
+	.QueueWorkActions .StatusSelect {
+		margin-left: auto;
+	}
+
+	.QueueStatusPill {
+		border-radius: 999px;
+		font-size: 10px;
+		font-weight: 700;
+		padding: 4px 8px;
+		text-transform: uppercase;
+		white-space: nowrap;
+	}
+
+	.QueueStatusPill.ToClip {
+		background: var(--AmberSoft);
+		color: var(--Amber);
+	}
+
+	.QueueStatusPill.Finished {
+		background: var(--BlueSoft);
+		color: var(--Blue);
+	}
+
+	.QueueStatusPill.Uploaded {
+		background: var(--GreenSoft);
+		color: var(--Green);
+	}
+
+	.IconButton {
+		align-items: center;
+		background: var(--Surface);
+		border: 1px solid var(--Rule);
+		border-radius: 6px;
+		color: var(--Ink2);
+		display: inline-grid;
+		height: 31px;
+		place-items: center;
+		width: 31px;
+	}
+
+	.IconButton:hover {
+		border-color: var(--Ink3);
+		color: var(--Green);
+		transform: translateY(-1px);
+	}
+
+	.IconButton.Danger:hover {
+		color: #8c2a1e;
+	}
+
+	.StatusSelect {
+		font-weight: 600;
+		min-width: 112px;
+		transition:
+			background-color 180ms ease,
+			border-color 180ms ease,
+			color 180ms ease,
+			transform 180ms ease;
+	}
+
+	.StatusSelect.ToClip {
+		background-color: var(--AmberSoft);
+		border-color: color-mix(in srgb, var(--Amber) 32%, var(--Rule));
+		color: var(--Amber);
+	}
+
+	.StatusSelect.Finished {
+		background-color: var(--BlueSoft);
+		border-color: color-mix(in srgb, var(--Blue) 32%, var(--Rule));
+		color: var(--Blue);
+	}
+
+	.StatusSelect.Uploaded {
+		background-color: var(--GreenSoft);
+		border-color: #b0d0bc;
+		color: var(--Green);
 	}
 
 	.SourceIdLine {
@@ -1880,6 +2059,7 @@
 	}
 
 	.Toast {
+		animation: ToastIn 220ms ease both;
 		background: var(--Ink);
 		border: 1px solid #3f3c36;
 		border-radius: 8px;
@@ -1891,6 +2071,7 @@
 
 	.Toast.Success {
 		border-color: #8dbf9e;
+		box-shadow: 0 12px 30px rgba(43, 92, 58, 0.22);
 	}
 
 	.Toast.Error {
@@ -1899,6 +2080,17 @@
 
 	.Toast.Info {
 		border-color: #8aa5cf;
+	}
+
+	@keyframes ToastIn {
+		from {
+			opacity: 0;
+			transform: translateY(-8px) scale(0.98);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
 	}
 
 	.FeedRow.Static {
@@ -1955,10 +2147,7 @@
 	}
 
 	.Tag,
-	.ActionTag,
-	.Allowed span,
-	.TaskTargets span,
-	.CreatorPlatforms span {
+	.ActionTag {
 		background: var(--RuleSoft);
 		border-radius: 4px;
 		color: var(--Ink2);
@@ -1972,11 +2161,6 @@
 	.LiveTag {
 		background: var(--Green);
 		color: white;
-	}
-
-	.CampaignTag {
-		background: var(--BlueSoft);
-		color: var(--Blue);
 	}
 
 	.ActionTag {
@@ -2025,10 +2209,7 @@
 		margin-top: 5px;
 	}
 
-	.StatGrid,
-	.CampaignDetails,
-	.AccountStats,
-	.MetricBand {
+	.StatGrid {
 		display: grid;
 		gap: 10px;
 	}
@@ -2038,16 +2219,12 @@
 		margin-top: 12px;
 	}
 
-	.StatGrid div,
-	.CampaignDetails div {
+	.StatGrid div {
 		border-top: 1px solid var(--RuleSoft);
 		padding-top: 9px;
 	}
 
 	.StatGrid span,
-	.CampaignDetails span,
-	.AccountStats span,
-	.MetricBand span,
 	.PreferenceGrid span {
 		color: var(--Ink3);
 		display: block;
@@ -2056,8 +2233,7 @@
 	}
 
 	.StatGrid strong,
-	.Revenue,
-	.MetricBand strong {
+	.Revenue {
 		font-family: 'Fraunces', serif;
 		font-size: 24px;
 		font-weight: 400;
@@ -2072,98 +2248,6 @@
 		margin: 4px 0;
 	}
 
-	.TaskTargets {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 4px;
-		margin-top: 8px;
-	}
-
-	.TaskTargets span {
-		margin: 0;
-	}
-
-	.TaskTargets span.Done {
-		background: var(--GreenSoft);
-		color: var(--Green);
-	}
-
-	.TaskTargets a {
-		background: var(--BlueSoft);
-		border-radius: 4px;
-		color: var(--Blue);
-		display: inline-flex;
-		font-size: 10px;
-		margin: 0;
-		padding: 2px 6px;
-		text-decoration: none;
-		text-transform: uppercase;
-	}
-
-	.CreatorHeader {
-		align-items: center;
-		background: var(--Surface);
-		border-bottom: 1px solid var(--Rule);
-		display: flex;
-		gap: 16px;
-		padding: 24px 40px;
-	}
-
-	.CreatorAvatar {
-		background: var(--Ink);
-		border-radius: 12px;
-		color: var(--Page);
-		display: grid;
-		font-family: 'Fraunces', serif;
-		font-size: 24px;
-		height: 54px;
-		place-items: center;
-		width: 54px;
-	}
-
-	.CreatorMeta {
-		flex: 1;
-	}
-
-	.CreatorSelect {
-		border: 0;
-		font-family: 'Fraunces', serif;
-		font-size: 24px;
-		padding-left: 0;
-	}
-
-	.CreatorPlatforms {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-		margin-top: 8px;
-	}
-
-	.CreatorStats {
-		display: flex;
-		gap: 22px;
-	}
-
-	.CreatorStats strong {
-		display: block;
-		font-family: 'Fraunces', serif;
-		font-size: 20px;
-	}
-
-	.CreatorStats span {
-		color: var(--Ink3);
-		font-size: 10px;
-		text-transform: uppercase;
-	}
-
-	.NotesCard {
-		display: grid;
-		gap: 10px;
-		margin-top: 18px;
-		padding: 16px;
-	}
-
-	.CreatorRuleSummary,
 	.SourceGroup {
 		background: var(--Surface);
 		border: 1px solid var(--Rule);
@@ -2193,7 +2277,7 @@
 		border-left: 0;
 		border-radius: 0;
 		border-right: 0;
-		grid-template-columns: 140px 110px minmax(180px, 1.2fr) minmax(160px, 1fr) 90px minmax(160px, 1fr) 76px repeat(3, auto) repeat(3, minmax(130px, 1fr)) auto;
+		grid-template-columns: 140px 110px minmax(220px, 1.4fr) minmax(180px, 1fr) 120px minmax(180px, 1fr) 76px auto;
 		margin: 0;
 	}
 
@@ -2201,98 +2285,18 @@
 		grid-template-columns: 1fr 120px 150px minmax(180px, 1fr) minmax(180px, 1fr) auto;
 	}
 
-	.QuickForm.CreatorEditForm {
-		grid-template-columns: repeat(6, minmax(0, 1fr)) auto;
-	}
-
-	.QuickForm label {
-		align-items: center;
-		color: var(--Ink2);
-		display: inline-flex;
-		font-size: 11px;
-		gap: 4px;
-		white-space: nowrap;
-	}
-
-	.NotesCard span {
-		color: var(--Ink3);
-		font-size: 10px;
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
-	}
-
-	.NotesCard textarea {
-		min-height: 120px;
-		resize: vertical;
-	}
-
-	.TableWrap {
-		padding: 0;
-	}
-
-	table {
-		border-collapse: collapse;
-		width: 100%;
-	}
-
-	th,
-	td {
-		border-bottom: 1px solid var(--RuleSoft);
-		padding: 12px 16px;
-		text-align: left;
-		vertical-align: top;
-	}
-
-	th {
-		background: var(--Surface);
-		color: var(--Ink3);
-		font-size: 10px;
-		letter-spacing: 0.12em;
-		position: sticky;
-		text-transform: uppercase;
-		top: 0;
-	}
-
-	.EditRow td {
-		background: var(--Surface);
-		padding-bottom: 16px;
-		padding-top: 0;
-	}
-
-	.RowActions {
-		align-items: center;
-		display: flex;
-		gap: 6px;
-	}
-
-	.RowActions > button {
-		background: var(--Page);
-		border: 1px solid var(--Rule);
-		border-radius: 6px;
-		color: var(--Ink2);
-		display: grid;
-		height: 30px;
-		place-items: center;
-		width: 30px;
-	}
-
-	.InlineEditForm,
-	.CampaignEditForm {
+	.InlineEditForm {
 		display: grid;
 		gap: 8px;
 	}
 
 	.InlineEditForm {
 		align-items: center;
-		grid-template-columns: minmax(160px, 1fr) 86px minmax(160px, 1fr) 70px 110px repeat(3, auto) auto;
-	}
-
-	.InlineEditForm label {
-		align-items: center;
-		color: var(--Ink2);
-		display: inline-flex;
-		font-size: 11px;
-		gap: 4px;
+		background: var(--Surface);
+		border: 1px solid var(--RuleSoft);
+		border-radius: 7px;
+		grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) 92px minmax(160px, 1fr) 70px 118px auto;
+		padding: 10px;
 	}
 
 	.Hook {
@@ -2329,21 +2333,18 @@
 		font-weight: 400;
 	}
 
-	.CampaignGrid,
 	.AccountGrid,
 	.PreferenceGrid {
 		display: grid;
 		gap: 14px;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
+		grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 	}
 
-	.CampaignCard,
 	.AccountCard,
 	.PreferenceGrid label {
 		padding: 18px;
 	}
 
-	.CampaignTop,
 	.AccountTop {
 		align-items: flex-start;
 		display: flex;
@@ -2351,85 +2352,15 @@
 		margin-bottom: 16px;
 	}
 
-	.CampaignTop h2,
 	.AccountTop h2 {
 		font-family: 'Fraunces', serif;
 		font-size: 20px;
 		font-weight: 400;
 	}
 
-	.CampaignTop p,
 	.AccountTop p {
 		color: var(--Ink3);
 		font-size: 12px;
-	}
-
-	.CampaignTop strong {
-		color: var(--Green);
-		font-family: 'Fraunces', serif;
-		font-size: 24px;
-		font-weight: 400;
-	}
-
-	.CampaignTop strong span {
-		color: var(--Ink3);
-		font-family: 'DM Sans', sans-serif;
-		font-size: 11px;
-	}
-
-	.CampaignDetails {
-		grid-template-columns: repeat(3, 1fr);
-	}
-
-	.Allowed {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-		margin-top: 14px;
-	}
-
-	.Allowed span {
-		background: var(--GreenSoft);
-		color: var(--Green);
-		margin: 0;
-	}
-
-	.CampaignEditForm {
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		margin-top: 14px;
-	}
-
-	.CampaignEditForm button {
-		width: max-content;
-	}
-
-	.CampaignRules {
-		display: grid;
-		gap: 8px;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		margin-top: 14px;
-	}
-
-	.CampaignRules div {
-		background: var(--RuleSoft);
-		border-radius: 6px;
-		padding: 9px;
-	}
-
-	.CampaignRules span {
-		color: var(--Ink3);
-		display: block;
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.1em;
-		margin-bottom: 4px;
-		text-transform: uppercase;
-	}
-
-	.CampaignRules p {
-		color: var(--Ink2);
-		font-size: 12px;
-		line-height: 1.35;
 	}
 
 	.AddCard {
@@ -2438,15 +2369,6 @@
 		border-radius: 8px;
 		color: var(--Ink3);
 		min-height: 190px;
-	}
-
-	.MetricBand {
-		grid-template-columns: repeat(4, 1fr);
-		margin-top: 26px;
-	}
-
-	.MetricBand > div {
-		padding: 16px;
 	}
 
 	.AccountGrid {
@@ -2661,11 +2583,6 @@
 		gap: 12px;
 	}
 
-	.AccountStats {
-		grid-template-columns: repeat(3, 1fr);
-		margin-bottom: 12px;
-	}
-
 	.ConnectedText {
 		background: var(--GreenSoft);
 		border-color: #b0d0bc;
@@ -2713,18 +2630,33 @@
 	@media (max-width: 1100px) {
 		.ContentPanes,
 		.AccountGrid,
-		.CampaignGrid,
 		.ApiKeyForm,
 		.PreferenceGrid {
 			grid-template-columns: 1fr;
 		}
 
 		.RightPanel {
-			display: none;
+			border-left: 0;
+			border-top: 1px solid var(--Rule);
+			display: grid;
+			grid-template-columns: minmax(0, 1.2fr) minmax(220px, 0.8fr);
+			gap: 12px;
+			max-height: none;
+			overflow: visible;
+			padding: 14px;
 		}
 
 		.LeadGrid {
 			grid-template-columns: 1fr;
+		}
+
+		.SelectedSourceCard {
+			margin-bottom: 0;
+		}
+
+		.PanelSection,
+		.RevenueBlock {
+			margin-bottom: 0;
 		}
 	}
 
@@ -2737,7 +2669,6 @@
 			overflow-x: auto;
 		}
 
-		.CreatorHeader,
 		.Subheader {
 			align-items: flex-start;
 			flex-wrap: wrap;
@@ -2759,23 +2690,43 @@
 			order: 4;
 		}
 
+		.FeedRow {
+			flex-wrap: wrap;
+		}
+
+		.SourceLink,
+		.QueueSourceForm {
+			border-top: 1px solid var(--RuleSoft);
+			flex: 1;
+			min-height: 36px;
+			order: 5;
+		}
+
+		.SourceLink {
+			border-left: 0;
+		}
+
+		.QueueSourceForm button {
+			border-left: 0;
+			width: 100%;
+		}
+
 		.RowTriageActions button {
 			flex: 1;
 			min-height: 34px;
 		}
 
-		.CreatorStats,
-		.MetricBand {
-			display: grid;
-			grid-template-columns: repeat(2, 1fr);
-			width: 100%;
+		.RightPanel {
+			grid-template-columns: 1fr;
+		}
+
+		.SelectedActions {
+			grid-template-columns: 1fr;
 		}
 
 		.QuickForm,
 		.QuickForm.QueueForm,
-		.QuickForm.CreatorEditForm,
-		.InlineEditForm,
-		.CampaignEditForm {
+		.InlineEditForm {
 			grid-template-columns: 1fr;
 		}
 	}

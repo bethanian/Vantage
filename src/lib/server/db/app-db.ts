@@ -141,9 +141,9 @@ async function SeedPostgres() {
 		}))
 	);
 	await InsertRows('saved_searches', [
-		{ id: 1, query: 'Whop', created_at: new Date().toISOString() },
-		{ id: 2, query: 'challenge', created_at: new Date().toISOString() },
-		{ id: 3, query: 'reaction', created_at: new Date().toISOString() }
+		{ id: 1, query: 'challenge', created_at: new Date().toISOString() },
+		{ id: 2, query: 'reaction', created_at: new Date().toISOString() },
+		{ id: 3, query: 'live stream', created_at: new Date().toISOString() }
 	]);
 	await InsertRows('app_settings', [
 		{ id: 1, key: 'NicheKeywords', value: 'gaming, slots, IRL, reaction, funny' },
