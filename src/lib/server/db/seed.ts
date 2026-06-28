@@ -1,10 +1,9 @@
-import { Campaigns, ClipTasks, ContentItems, Creators } from '$lib/vantage-data';
+import { Campaigns, ClipTasks, Creators } from '$lib/vantage-data';
 import { Db, Sqlite } from './index';
 import {
 	AppSettingsTable,
 	CampaignsTable,
 	ClipTasksTable,
-	ContentItemsTable,
 	CreatorsTable,
 	PlatformAccountsTable,
 	SavedSearchesTable
@@ -183,8 +182,6 @@ function SeedDatabase() {
 				}))
 			)
 			.run();
-
-		Db.insert(ContentItemsTable).values(ContentItems).run();
 
 		Db.insert(ClipTasksTable)
 			.values(ClipTasks.map((Task) => ({ ...Task, Targets: JSON.stringify(Task.Targets), UploadUrls: JSON.stringify(Task.UploadUrls) })))

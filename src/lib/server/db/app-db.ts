@@ -1,4 +1,4 @@
-import { Campaigns, ClipTasks, ContentItems, Creators } from '$lib/vantage-data';
+import { Campaigns, ClipTasks, Creators } from '$lib/vantage-data';
 import { ImportTables } from '$lib/server/db/metadata';
 import { PostgresClient } from '$lib/server/db/postgres';
 
@@ -17,6 +17,7 @@ export async function EnsureAppDatabaseReady() {
 		const { EnsureDatabaseReady } = await import('$lib/server/db/seed');
 		EnsureDatabaseReady();
 	}
+	await CleanupDemoContentItems();
 	Ready = true;
 }
 
@@ -98,30 +99,6 @@ async function SeedPostgres() {
 		}))
 	);
 	await InsertRows(
-		'content_items',
-		ContentItems.map((Item) => ({
-			id: Item.Id,
-			creator: Item.Creator,
-			external_id: Item.ExternalId ?? null,
-			platform: Item.Platform,
-			kind: Item.Kind,
-			title: Item.Title,
-			age: Item.Age,
-			metric: Item.Metric,
-			campaign: Item.Campaign,
-			status: Item.Status,
-			score: Item.Score,
-			live: Boolean(Item.Live),
-			velocity: Item.Velocity ?? null,
-			source_url: Item.SourceUrl ?? null,
-			thumbnail_url: Item.ThumbnailUrl ?? null,
-			published_at: Item.PublishedAt ?? null,
-			last_action: Item.LastAction ?? null,
-			last_action_by: Item.LastActionBy ?? null,
-			last_action_at: Item.LastActionAt ?? null
-		}))
-	);
-	await InsertRows(
 		'clip_tasks',
 		ClipTasks.map((Task) => ({
 			id: Task.Id,
@@ -164,6 +141,16 @@ async function InsertRows(TableName: string, Rows: Record<string, unknown>[]) {
 	if (!Meta) throw new Error(`Unknown table ${TableName}`);
 	const Sql = PostgresClient as any;
 	await Sql`insert into ${Sql(TableName)} ${Sql(Rows, Meta.Columns as unknown as string[])}`;
+}
+
+async function CleanupDemoContentItems() {
+	await Run(
+		`delete from content_items
+		 where external_id is null
+		   and source_url is null
+		   and thumbnail_url is null
+		   and published_at is null`
+	);
 }
 
 if (!IsPostgresRuntime) await LoadSqlite();

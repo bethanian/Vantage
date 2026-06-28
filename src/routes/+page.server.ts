@@ -36,7 +36,8 @@ export async function load() {
 				Platform: Item.Platform as ContentItem['Platform'],
 				Status: Item.Status as ContentItem['Status'],
 				Live: Boolean(Item.Live),
-				Velocity: Item.Velocity ?? undefined
+				Velocity: Item.Velocity ?? undefined,
+				ThumbnailUrl: NormalizeThumbnailUrl(Item.ThumbnailUrl)
 			})
 		);
 
@@ -623,6 +624,16 @@ function SuggestedHook(Title: string) {
 	const CleanTitle = Title.trim();
 	if (!CleanTitle) return 'clip this moment';
 	return CleanTitle.length > 72 ? `${CleanTitle.slice(0, 69)}...` : CleanTitle;
+}
+
+function NormalizeThumbnailUrl(Url?: string | null) {
+	if (!Url) return null;
+	return Url
+		.replace(/^\/\//, 'https://')
+		.replaceAll('{width}', '640')
+		.replaceAll('{height}', '360')
+		.replaceAll('%{width}', '640')
+		.replaceAll('%{height}', '360');
 }
 
 type ContentRow = {

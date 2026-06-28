@@ -71,13 +71,16 @@
 	let NeedsActor = $state(true);
 	let SelectedFeedItemId = $state<number | null>(null);
 	let ShowManualQueueForm = $state(false);
+	let FailedThumbnailIds = $state<Set<number>>(new Set());
 
 	const LiveCount = $derived(ContentItems.filter((Item) => Item.Live).length);
 	const HandledCount = $derived(ContentItems.filter((Item) => ['Watched', 'Clipped', 'Uploaded', 'Rejected'].includes(Item.Status)).length);
 	const FreshCount = $derived(ContentItems.filter((Item) => Item.Status === 'New').length);
 	const FinishedCount = $derived(QueueState.filter((Task) => Task.Status === 'Finished').length);
 	const UploadedCount = $derived(QueueState.filter((Task) => NormalizeQueueStatus(Task.Status) === 'Uploaded').length);
-	const ActiveSourceCount = $derived(PlatformAccounts.filter((Account) => Account.Connected || Account.LastSyncedAt).length);
+	const SyncedSourceCount = $derived(PlatformAccounts.filter((Account) => Account.Connected || Account.LastSyncedAt).length);
+	const ApiSourceCount = $derived(PlatformAccounts.filter((Account) => ['Kick', 'Twitch', 'YouTube'].includes(Account.Platform)).length);
+	const ManualSourceCount = $derived(PlatformAccounts.length - ApiSourceCount);
 	const QueueCreatorOptions = $derived.by(() => {
 		const Names = new Set<string>();
 		for (const Account of PlatformAccounts) Names.add(Account.Creator);
@@ -209,6 +212,14 @@
 			Instagram: 'ti-brand-instagram',
 			X: 'ti-brand-x'
 		}[Platform];
+	}
+
+	function HasThumbnail(Item: ContentItem) {
+		return Boolean(Item.ThumbnailUrl && !FailedThumbnailIds.has(Item.Id));
+	}
+
+	function MarkThumbnailFailed(Id: number) {
+		FailedThumbnailIds = new Set([...FailedThumbnailIds, Id]);
 	}
 
 	function PushToast(Message: string, Kind: ToastKind = 'Success') {
@@ -459,8 +470,8 @@
 								<div class="LeadCell">
 									<button class:Selected={SelectedFeedItem?.Id === Item.Id} class="LeadMain" onclick={() => SelectFeedItem(Item)}>
 										<div class="LeadMedia">
-											{#if Item.ThumbnailUrl}
-												<img src={Item.ThumbnailUrl} alt="" loading="lazy" />
+											{#if HasThumbnail(Item)}
+												<img src={Item.ThumbnailUrl} alt="" loading="lazy" onerror={() => MarkThumbnailFailed(Item.Id)} />
 											{:else}
 												<i class={`ti ${PlatformIcon(Item.Platform)}`}></i>
 											{/if}
@@ -500,8 +511,8 @@
 									<button class="FeedMain" onclick={() => SelectFeedItem(Item)}>
 										<span class="RowNum">{Index + 1}</span>
 										<span class="RowThumb">
-											{#if Item.ThumbnailUrl}
-												<img src={Item.ThumbnailUrl} alt="" loading="lazy" />
+											{#if HasThumbnail(Item)}
+												<img src={Item.ThumbnailUrl} alt="" loading="lazy" onerror={() => MarkThumbnailFailed(Item.Id)} />
 											{:else}
 												<i class={`ti ${PlatformIcon(Item.Platform)}`}></i>
 											{/if}
@@ -549,8 +560,8 @@
 						<div class="SelectedSourceCard">
 							{#if SelectedFeedItem}
 								<div class="SelectedMedia">
-									{#if SelectedFeedItem.ThumbnailUrl}
-										<img src={SelectedFeedItem.ThumbnailUrl} alt="" loading="lazy" />
+									{#if HasThumbnail(SelectedFeedItem)}
+										<img src={SelectedFeedItem.ThumbnailUrl} alt="" loading="lazy" onerror={() => MarkThumbnailFailed(SelectedFeedItem.Id)} />
 									{:else}
 										<i class={`ti ${PlatformIcon(SelectedFeedItem.Platform)}`}></i>
 									{/if}
@@ -631,11 +642,11 @@
 							{/each}
 						</div>
 						<div class="RevenueBlock">
-							<div class="PanelLabel">Source coverage</div>
-							<div class="Revenue">{ActiveSourceCount}/{PlatformAccounts.length}</div>
-							<div class="Muted">synced source accounts</div>
-							<div class="ScoreBar"><span style={`width:${PlatformAccounts.length ? (ActiveSourceCount / PlatformAccounts.length) * 100 : 0}%`}></span></div>
-							<div class="GoalLine"><span>{HandledCount} reviewed</span><span>{ContentItems.length} feed items</span></div>
+							<div class="PanelLabel">Source status</div>
+							<div class="Revenue">{SyncedSourceCount} synced</div>
+							<div class="Muted">{PlatformAccounts.length} tracked source accounts</div>
+							<div class="ScoreBar"><span style={`width:${ApiSourceCount ? (SyncedSourceCount / ApiSourceCount) * 100 : 0}%`}></span></div>
+							<div class="GoalLine"><span>{ManualSourceCount} manual-only</span><span>{ContentItems.length} feed items</span></div>
 						</div>
 					</aside>
 				</div>
