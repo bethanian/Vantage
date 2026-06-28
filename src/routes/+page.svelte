@@ -191,7 +191,11 @@
 	}
 
 	function IsQueued(Item: ContentItem) {
-		return QueueState.some((Task) => {
+		return Boolean(QueuedTaskForItem(Item));
+	}
+
+	function QueuedTaskForItem(Item: ContentItem) {
+		return QueueState.find((Task) => {
 			if (Item.SourceUrl && Task.SourceUrl) return Task.SourceUrl === Item.SourceUrl;
 			return Task.Creator === Item.Creator && Task.Source === Item.Title;
 		});
@@ -243,13 +247,13 @@
 		return `${Action} - ${Actor}`;
 	}
 
-	function FormFeedback(Label: string): SubmitFunction {
+	function FormFeedback(Label: string, SuccessText = 'saved'): SubmitFunction {
 		return ({ formData }) => {
 			formData.set('Actor', ActorName || ActorDraft || 'Someone');
 			return async ({ result, update }) => {
 			await update();
 			const Failed = result.type === 'failure' || result.type === 'error';
-			PushToast(`${Label} ${Failed ? 'failed' : 'saved'}`, Failed ? 'Error' : 'Success');
+			PushToast(`${Label} ${Failed ? 'failed' : SuccessText}`, Failed ? 'Error' : 'Success');
 		};
 		};
 	}
@@ -540,12 +544,21 @@
 											</button>
 										{/each}
 									</div>
-									<form method="POST" action="?/AddContentToQueue" class="QueueSourceForm" use:enhance={FormFeedback('Queue item')}>
-										<input type="hidden" name="ContentId" value={Item.Id} />
-										<button disabled={IsQueued(Item)} aria-label={`Queue ${Item.Title}`}>
-											<i class={`ti ${IsQueued(Item) ? 'ti-check' : 'ti-list-plus'}`}></i>
-										</button>
-									</form>
+									{#if QueuedTaskForItem(Item)}
+										<form method="POST" action="?/DeleteContentQueueItem" class="QueueSourceForm" use:enhance={FormFeedback('Queue item', 'removed')}>
+											<input type="hidden" name="ContentId" value={Item.Id} />
+											<button class="Danger" aria-label={`Remove ${Item.Title} from queue`}>
+												<i class="ti ti-trash"></i>
+											</button>
+										</form>
+									{:else}
+										<form method="POST" action="?/AddContentToQueue" class="QueueSourceForm" use:enhance={FormFeedback('Queue item')}>
+											<input type="hidden" name="ContentId" value={Item.Id} />
+											<button aria-label={`Queue ${Item.Title}`}>
+												<i class="ti ti-list-plus"></i>
+											</button>
+										</form>
+									{/if}
 								</div>
 							{:else}
 								<div class="EmptyState InlineEmpty">
@@ -581,13 +594,21 @@
 											<i class="ti ti-external-link"></i>Open source
 										</a>
 									{/if}
-									<form method="POST" action="?/AddContentToQueue" use:enhance={FormFeedback('Queue item')}>
-										<input type="hidden" name="ContentId" value={SelectedFeedItem.Id} />
-										<button class="PrimaryButton" disabled={IsQueued(SelectedFeedItem)}>
-											<i class={`ti ${IsQueued(SelectedFeedItem) ? 'ti-check' : 'ti-list-plus'}`}></i>
-											{IsQueued(SelectedFeedItem) ? 'Queued' : 'Queue to clip'}
-										</button>
-									</form>
+									{#if QueuedTaskForItem(SelectedFeedItem)}
+										<form method="POST" action="?/DeleteContentQueueItem" use:enhance={FormFeedback('Queue item', 'removed')}>
+											<input type="hidden" name="ContentId" value={SelectedFeedItem.Id} />
+											<button class="PrimaryButton Danger">
+												<i class="ti ti-trash"></i>Remove from queue
+											</button>
+										</form>
+									{:else}
+										<form method="POST" action="?/AddContentToQueue" use:enhance={FormFeedback('Queue item')}>
+											<input type="hidden" name="ContentId" value={SelectedFeedItem.Id} />
+											<button class="PrimaryButton">
+												<i class="ti ti-list-plus"></i>Queue to clip
+											</button>
+										</form>
+									{/if}
 								</div>
 								<div class="SelectedNote">
 									<i class="ti ti-info-circle"></i>
@@ -713,7 +734,7 @@
 								<button class="IconButton" aria-label={`Edit clip task ${Task.Id}`} onclick={() => (EditingTaskId = EditingTaskId === Task.Id ? null : Task.Id)}>
 									<i class="ti ti-edit"></i>
 								</button>
-								<form method="POST" action="?/DeleteClipTask" class="InlineDelete TableDelete" use:enhance={FormFeedback('Clip')}>
+								<form method="POST" action="?/DeleteClipTask" class="InlineDelete TableDelete" use:enhance={FormFeedback('Clip', 'removed')}>
 									<input type="hidden" name="Id" value={Task.Id} />
 									<button class="IconButton Danger" aria-label={`Delete clip task ${Task.Id}`}><i class="ti ti-trash"></i></button>
 								</form>
@@ -1826,6 +1847,15 @@
 		color: var(--Ink);
 	}
 
+	.QueueSourceForm button.Danger {
+		color: #a44835;
+	}
+
+	.QueueSourceForm button.Danger:hover {
+		background: #f7e9e2;
+		color: #7f2f21;
+	}
+
 	.QueueSourceLink {
 		align-items: center;
 		color: var(--Green);
@@ -2324,6 +2354,11 @@
 		display: inline-flex;
 		gap: 7px;
 		text-decoration: none;
+	}
+
+	.PrimaryButton.Danger {
+		background: #9d3f2d;
+		border-color: #9d3f2d;
 	}
 
 	.PrimaryButton:disabled {

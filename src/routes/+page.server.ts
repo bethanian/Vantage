@@ -229,6 +229,26 @@ export const actions: Actions = {
 		return { Created: 'ClipTask' };
 	},
 
+	DeleteContentQueueItem: async ({ request }) => {
+		await EnsureAppDatabaseReady();
+		const Form = await request.formData();
+		const Actor = ActorFromForm(Form);
+		const ContentId = NumberField(Form, 'ContentId', 0);
+		if (!ContentId) return fail(400, { Message: 'Content item id is required' });
+		const Item = await Get<ContentRow>('select * from content_items where id = ?', [ContentId]);
+		if (!Item) return fail(404, { Message: 'Content item was not found' });
+		const Task = await Get<{ id: number }>(
+			"select id from clip_tasks where creator = ? and source = ? and coalesce(source_url, '') = coalesce(?, '') limit 1",
+			[Item.creator, Item.title, Item.source_url ?? '']
+		);
+		if (!Task) return { Deleted: 'ClipTask' };
+		await Run('delete from clip_tasks where id = ?', [Task.id]);
+		await Run("update content_items set status = 'New' where id = ? and status = 'Watched'", [ContentId]);
+		await MarkContentAction(ContentId, Actor, 'Removed from queue');
+		await WriteActivity(Actor, { EntityType: 'ClipTask', EntityId: Task.id, Action: 'Removed queued clip', Label: `Removed queue item - ${Actor}` });
+		return { Deleted: 'ClipTask' };
+	},
+
 	AddSourceAccount: async ({ request }) => {
 		await EnsureAppDatabaseReady();
 		const Form = await request.formData();
