@@ -29,7 +29,13 @@ export async function load() {
 		 title as "Title", age as "Age", metric as "Metric", campaign as "Campaign", status as "Status",
 		 score as "Score", live as "Live", velocity as "Velocity", source_url as "SourceUrl",
 		 thumbnail_url as "ThumbnailUrl", published_at as "PublishedAt", last_action as "LastAction",
-		 last_action_by as "LastActionBy", last_action_at as "LastActionAt" from content_items`
+		 last_action_by as "LastActionBy", last_action_at as "LastActionAt"
+		 from content_items
+		 where exists (
+			select 1 from platform_accounts
+			where lower(platform_accounts.creator) = lower(content_items.creator)
+			  and platform_accounts.platform = content_items.platform
+		 )`
 	))
 		.map(
 			(Item): ContentItem => ({
@@ -352,8 +358,8 @@ export const actions: Actions = {
 		const Account = await Get<{ creator: string; platform: string }>('select creator, platform from platform_accounts where id = ? limit 1', [Id]);
 		if (!Account) return { Deleted: 'SourceAccount' };
 		await Run('delete from platform_accounts where id = ?', [Id]);
-		await Run('delete from content_items where creator = ? and platform = ?', [Account.creator, Account.platform]);
-		await Run('delete from clip_tasks where creator = ? and platform = ?', [Account.creator, Account.platform]);
+		await Run('delete from content_items where lower(creator) = lower(?) and platform = ?', [Account.creator, Account.platform]);
+		await Run('delete from clip_tasks where lower(creator) = lower(?) and platform = ?', [Account.creator, Account.platform]);
 		await WriteActivity(Actor, {
 			EntityType: 'SourceAccount',
 			EntityId: Id,

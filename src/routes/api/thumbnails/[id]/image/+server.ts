@@ -106,20 +106,40 @@ async function FetchImage(Url: string) {
 }
 
 function GeneratedFallback(Item: ThumbnailImageRow) {
-	const Platform = Item.platform ?? 'Vantage';
-	const Brand = PlatformBrand(Platform);
-	const Label = EscapeXml(`${Platform} placeholder`);
-	const Svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360" role="img" aria-label="${Label}">
+	const StaticPath = StaticFallbackPath(Item.platform);
+	if (StaticPath) {
+		return new Response(null, {
+			status: 302,
+			headers: {
+				...FallbackHeaders,
+				location: StaticPath
+			}
+		});
+	}
+	return AppLogoFallback();
+}
+
+function StaticFallbackPath(Platform?: string | null) {
+	if (Platform === 'Twitch') return '/social-placeholders/twitch.png?v=1';
+	if (Platform === 'Kick') return '/social-placeholders/kick.png?v=1';
+	if (Platform === 'TikTok') return '/social-placeholders/tiktok.png?v=1';
+	if (Platform === 'Instagram') return '/social-placeholders/instagram.png?v=1';
+	return null;
+}
+
+function AppLogoFallback() {
+	const Svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360" role="img" aria-label="Vantage placeholder">
 		<defs>
 			<linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
-				<stop offset="0" stop-color="${Brand.BackgroundStart}"/>
-				<stop offset="1" stop-color="${Brand.BackgroundEnd}"/>
+				<stop offset="0" stop-color="#f5f2eb"/>
+				<stop offset="1" stop-color="#ded8cd"/>
 			</linearGradient>
 		</defs>
 		<rect width="640" height="360" fill="url(#bg)"/>
-		<rect x="52" y="42" width="536" height="276" rx="28" fill="${Brand.Surface}" opacity=".96"/>
-		${Brand.Mark}
-		<text x="320" y="265" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="30" font-style="italic" fill="${Brand.Text}">${Brand.Label}</text>
+		<rect x="52" y="42" width="536" height="276" rx="28" fill="#fbfaf6" opacity=".96"/>
+		<circle cx="320" cy="150" r="58" fill="#2b5c3a"/>
+		<text x="320" y="171" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="58" font-style="italic" fill="#c7e6cf">V</text>
+		<text x="320" y="260" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="34" font-style="italic" fill="#2b5c3a">Vantage</text>
 	</svg>`;
 	return new Response(Svg, {
 		headers: {
@@ -127,46 +147,6 @@ function GeneratedFallback(Item: ThumbnailImageRow) {
 			'content-type': 'image/svg+xml; charset=utf-8'
 		}
 	});
-}
-
-function PlatformBrand(Platform: string) {
-	if (Platform === 'Twitch') {
-		return {
-			Label: 'twitch',
-			BackgroundStart: '#efe9ff',
-			BackgroundEnd: '#ded0ff',
-			Surface: '#ffffff',
-			Text: '#9146ff',
-			Mark: `<text x="320" y="200" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-size="78" font-weight="900" fill="#9146ff">twitch</text>`
-		};
-	}
-	if (Platform === 'Kick') return LogoBrand('Kick', '#2ed15f', '#e9f8ed', '#d7f0dd', '#ffffff', '#1d7f39');
-	if (Platform === 'YouTube') return LogoBrand('YouTube', '#ff0033', '#fff0f0', '#ffe0e0', '#ffffff', '#c2182b');
-	if (Platform === 'TikTok') return LogoBrand('TikTok', '#111111', '#f3f2ee', '#e4e0d7', '#ffffff', '#111111');
-	if (Platform === 'Instagram') return LogoBrand('Instagram', '#d9468c', '#fff0f7', '#f3dfeb', '#ffffff', '#a92767');
-	if (Platform === 'X') return LogoBrand('X', '#111111', '#f4f3ef', '#e1ddd4', '#ffffff', '#111111');
-	return LogoBrand('Vantage', '#2b5c3a', '#f5f2eb', '#ded8cd', '#fbfaf6', '#2b5c3a');
-}
-
-function LogoBrand(Label: string, Accent: string, BackgroundStart: string, BackgroundEnd: string, Surface: string, Text: string) {
-	return {
-		Label,
-		BackgroundStart,
-		BackgroundEnd,
-		Surface,
-		Text,
-		Mark: `<circle cx="320" cy="154" r="54" fill="${Accent}"/><text x="320" y="173" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-size="50" font-weight="900" fill="#fff">${EscapeXml(Label[0] ?? 'V')}</text>`
-	};
-}
-
-function EscapeXml(Value?: string | null) {
-	return (Value ?? '').replace(/[<>&"']/g, (Character) => ({
-		'<': '&lt;',
-		'>': '&gt;',
-		'&': '&amp;',
-		'"': '&quot;',
-		"'": '&apos;'
-	})[Character] ?? Character);
 }
 
 type ThumbnailImageRow = {

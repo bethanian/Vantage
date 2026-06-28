@@ -8,5 +8,6 @@ data
 .env.*
 !.env.example
 *.png
+!static/social-placeholders/*.png
 tmp-vantage-dev.*
 tmp-vantage-github-dev.*
