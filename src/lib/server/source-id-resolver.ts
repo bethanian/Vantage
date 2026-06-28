@@ -27,7 +27,7 @@ export async function ResolveAllSourceIds() {
 	};
 }
 
-async function ResolveYoutubeSourceIds(): Promise<ResolveResult> {
+export async function ResolveYoutubeSourceIds(): Promise<ResolveResult> {
 	const ApiKey = await GetApiCredential('YOUTUBE_API_KEY');
 	if (!ApiKey) return { Platform: 'YouTube', Resolved: 0, Skipped: 0, Message: 'Missing YOUTUBE_API_KEY' };
 	const Accounts = (await SourceAccounts('YouTube')).filter((Account) => !/^UC[\w-]{20,}$/.test(Account.ExternalId));
@@ -52,7 +52,7 @@ async function ResolveYoutubeSourceIds(): Promise<ResolveResult> {
 	return { Platform: 'YouTube', Resolved, Skipped, Message: `Resolved ${Resolved}, skipped ${Skipped}` };
 }
 
-async function ResolveTwitchSourceIds(): Promise<ResolveResult> {
+export async function ResolveTwitchSourceIds(): Promise<ResolveResult> {
 	const ClientId = await GetApiCredential('TWITCH_CLIENT_ID');
 	const ClientSecret = await GetApiCredential('TWITCH_CLIENT_SECRET');
 	if (!ClientId || !ClientSecret) return { Platform: 'Twitch', Resolved: 0, Skipped: 0, Message: 'Missing Twitch credentials' };
@@ -85,7 +85,7 @@ async function ResolveTwitchSourceIds(): Promise<ResolveResult> {
 	return { Platform: 'Twitch', Resolved, Skipped, Message: `Resolved ${Resolved}, skipped ${Skipped}` };
 }
 
-async function ResolveKickSourceIds(): Promise<ResolveResult> {
+export async function ResolveKickSourceIds(): Promise<ResolveResult> {
 	const ClientId = await GetApiCredential('KICK_CLIENT_ID');
 	const ClientSecret = await GetApiCredential('KICK_CLIENT_SECRET');
 	if (!ClientId || !ClientSecret) return { Platform: 'Kick', Resolved: 0, Skipped: 0, Message: 'Missing Kick credentials' };

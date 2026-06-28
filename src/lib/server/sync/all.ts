@@ -1,3 +1,4 @@
+import { ResolveAllSourceIds } from '$lib/server/source-id-resolver';
 import { SyncKickLivestreams } from './kick';
 import { SyncTwitchSources } from './twitch';
 import { SyncYoutubeUploads } from './youtube';
@@ -11,6 +12,7 @@ export type SyncResult = {
 
 export async function SyncAllSources() {
 	const Results: SyncResult[] = [];
+	await ResolveAllSourceIds();
 	Results.push(NormalizeResult('YouTube', await SyncYoutubeUploads()));
 	Results.push(NormalizeResult('Twitch', await SyncTwitchSources()));
 	Results.push(NormalizeResult('Kick', await SyncKickLivestreams()));

@@ -2,6 +2,8 @@ import { All, EnsureAppDatabaseReady, Get, NextId, Run } from '$lib/server/db/ap
 import { CalculateOpportunityScore } from '$lib/opportunity-score';
 import { GetApiCredential } from '$lib/server/api-credentials';
 import { GetOpportunityWeights } from '$lib/server/opportunity-settings';
+import { ResolveYoutubeSourceIds } from '$lib/server/source-id-resolver';
+import { ResolveThumbnailUrl } from '$lib/server/thumbnails';
 
 type YoutubeSearchResponse = {
 	items?: {
@@ -33,6 +35,7 @@ export async function SyncYoutubeUploads() {
 		await FinishRun(RunId, 'Skipped', 0, 'Missing YOUTUBE_API_KEY');
 		return { Status: 'Skipped', ItemsFound: 0, Message: 'Missing YOUTUBE_API_KEY' };
 	}
+	await ResolveYoutubeSourceIds();
 
 	const Accounts = await All<YoutubeAccount>(
 		`select id as "Id", creator as "Creator", external_id as "ExternalId"
@@ -51,7 +54,29 @@ export async function SyncYoutubeUploads() {
 				const VideoId = Item.id?.videoId;
 				const Snippet = Item.snippet;
 				if (!VideoId || !Snippet?.title) continue;
-				if (await ContentExists(VideoId)) continue;
+				const SourceUrl = `https://www.youtube.com/watch?v=${VideoId}`;
+				const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, Snippet.thumbnails?.medium?.url ?? Snippet.thumbnails?.default?.url);
+				const Score = CalculateOpportunityScore({
+					Platform: 'YouTube',
+					Kind: 'Upload',
+					PublishedAt: Snippet.publishedAt,
+					Campaign: 'Organic',
+					Title: Snippet.title,
+					Status: 'New'
+				}, ScoreWeights);
+				const ExistingId = await ContentId(VideoId);
+				if (ExistingId) {
+					await UpdateExistingContent(ExistingId, {
+						Title: Snippet.title,
+						Age: FormatAge(Snippet.publishedAt),
+						Metric: 'fresh upload',
+						Score,
+						SourceUrl,
+						ThumbnailUrl,
+						PublishedAt: Snippet.publishedAt ?? null
+					});
+					continue;
+				}
 				await Run(
 					`insert into content_items
 					 (id, creator, external_id, platform, kind, title, age, metric, campaign, status, score, live, velocity, source_url, thumbnail_url, published_at)
@@ -67,18 +92,11 @@ export async function SyncYoutubeUploads() {
 						'fresh upload',
 						'Organic',
 						'New',
-						CalculateOpportunityScore({
-							Platform: 'YouTube',
-							Kind: 'Upload',
-							PublishedAt: Snippet.publishedAt,
-							Campaign: 'Organic',
-							Title: Snippet.title,
-							Status: 'New'
-						}, ScoreWeights),
+						Score,
 						false,
 						null,
-						`https://www.youtube.com/watch?v=${VideoId}`,
-						Snippet.thumbnails?.medium?.url ?? Snippet.thumbnails?.default?.url ?? null,
+						SourceUrl,
+						ThumbnailUrl,
 						Snippet.publishedAt ?? null
 					]
 				);
@@ -119,8 +137,18 @@ async function FetchRecentChannelVideos(ApiKey: string, ChannelId: string) {
 	return Payload.items ?? [];
 }
 
-async function ContentExists(ExternalId: string) {
-	return Boolean(await Get('select 1 from content_items where external_id = ? limit 1', [ExternalId]));
+async function ContentId(ExternalId: string) {
+	const Row = await Get<{ id: number }>('select id from content_items where external_id = ? limit 1', [ExternalId]);
+	return Row?.id ?? 0;
+}
+
+async function UpdateExistingContent(Id: number, Item: ExistingContentUpdate) {
+	await Run(
+		`update content_items
+		 set title = ?, age = ?, metric = ?, score = ?, source_url = ?, thumbnail_url = coalesce(?, thumbnail_url), published_at = ?
+		 where id = ?`,
+		[Item.Title, Item.Age, Item.Metric, Item.Score, Item.SourceUrl, Item.ThumbnailUrl, Item.PublishedAt, Id]
+	);
 }
 
 async function FinishRun(Id: number, Status: string, ItemsFound: number, Message: string) {
@@ -144,4 +172,14 @@ type YoutubeAccount = {
 	Id: number;
 	Creator: string;
 	ExternalId: string;
+};
+
+type ExistingContentUpdate = {
+	Title: string;
+	Age: string;
+	Metric: string;
+	Score: number;
+	SourceUrl: string;
+	ThumbnailUrl: string | null;
+	PublishedAt: string | null;
 };

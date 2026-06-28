@@ -2,6 +2,8 @@ import { All, EnsureAppDatabaseReady, Get, NextId, Run } from '$lib/server/db/ap
 import { CalculateOpportunityScore, type OpportunityWeights } from '$lib/opportunity-score';
 import { GetApiCredential } from '$lib/server/api-credentials';
 import { GetOpportunityWeights } from '$lib/server/opportunity-settings';
+import { ResolveTwitchSourceIds } from '$lib/server/source-id-resolver';
+import { ResolveThumbnailUrl } from '$lib/server/thumbnails';
 
 type TwitchTokenResponse = { access_token?: string; message?: string };
 type TwitchStreamResponse = {
@@ -47,6 +49,7 @@ export async function SyncTwitchSources() {
 		await FinishRun(RunId, 'Skipped', 0, 'Missing TWITCH_CLIENT_ID or TWITCH_CLIENT_SECRET');
 		return { Status: 'Skipped', ItemsFound: 0, Message: 'Missing TWITCH_CLIENT_ID or TWITCH_CLIENT_SECRET' };
 	}
+	await ResolveTwitchSourceIds();
 
 	const Accounts = await All<SourceAccount>(
 		`select id as "Id", creator as "Creator", external_id as "ExternalId"
@@ -105,7 +108,31 @@ async function SyncLiveStream(ClientId: string, Token: string, Account: SourceAc
 	let Count = 0;
 	for (const Stream of Payload.data ?? []) {
 		const ExternalId = `twitch-stream-${Stream.id}`;
-		if (await ContentExists(ExternalId)) continue;
+		const SourceUrl = `https://www.twitch.tv/${Stream.user_name.toLowerCase()}`;
+		const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, Stream.thumbnail_url);
+		const Score = CalculateOpportunityScore({
+			Platform: 'Twitch',
+			Kind: 'Live stream',
+			PublishedAt: Stream.started_at,
+			Viewers: Stream.viewer_count,
+			Campaign: 'Organic',
+			Title: Stream.title,
+			Status: 'New'
+		}, ScoreWeights);
+		const ExistingId = await ContentId(ExternalId);
+		if (ExistingId) {
+			await UpdateExistingContent(ExistingId, {
+				Title: Stream.title,
+				Age: FormatAge(Stream.started_at),
+				Metric: `${Stream.viewer_count.toLocaleString()} watching`,
+				Score,
+				Live: true,
+				SourceUrl,
+				ThumbnailUrl,
+				PublishedAt: Stream.started_at
+			});
+			continue;
+		}
 		await Run(
 			`insert into content_items
 			 (id, creator, external_id, platform, kind, title, age, metric, campaign, status, score, live, velocity, source_url, thumbnail_url, published_at)
@@ -121,19 +148,11 @@ async function SyncLiveStream(ClientId: string, Token: string, Account: SourceAc
 				`${Stream.viewer_count.toLocaleString()} watching`,
 				'Organic',
 				'New',
-				CalculateOpportunityScore({
-					Platform: 'Twitch',
-					Kind: 'Live stream',
-					PublishedAt: Stream.started_at,
-					Viewers: Stream.viewer_count,
-					Campaign: 'Organic',
-					Title: Stream.title,
-					Status: 'New'
-				}, ScoreWeights),
+				Score,
 				true,
 				null,
-				`https://www.twitch.tv/${Stream.user_name.toLowerCase()}`,
-				Stream.thumbnail_url ?? null,
+				SourceUrl,
+				ThumbnailUrl,
 				Stream.started_at
 			]
 		);
@@ -151,7 +170,30 @@ async function SyncVideos(ClientId: string, Token: string, Account: SourceAccoun
 	let Count = 0;
 	for (const Video of Payload.data ?? []) {
 		const ExternalId = `twitch-video-${Video.id}`;
-		if (await ContentExists(ExternalId)) continue;
+		const ThumbnailUrl = await ResolveThumbnailUrl(Video.url, Video.thumbnail_url);
+		const Score = CalculateOpportunityScore({
+			Platform: 'Twitch',
+			Kind: 'VOD',
+			PublishedAt: Video.created_at,
+			Views: Video.view_count,
+			Campaign: 'Organic',
+			Title: Video.title,
+			Status: 'New'
+		}, ScoreWeights);
+		const ExistingId = await ContentId(ExternalId);
+		if (ExistingId) {
+			await UpdateExistingContent(ExistingId, {
+				Title: Video.title,
+				Age: FormatAge(Video.created_at),
+				Metric: `${Video.view_count.toLocaleString()} views`,
+				Score,
+				Live: false,
+				SourceUrl: Video.url,
+				ThumbnailUrl,
+				PublishedAt: Video.created_at
+			});
+			continue;
+		}
 		await Run(
 			`insert into content_items
 			 (id, creator, external_id, platform, kind, title, age, metric, campaign, status, score, live, velocity, source_url, thumbnail_url, published_at)
@@ -167,19 +209,11 @@ async function SyncVideos(ClientId: string, Token: string, Account: SourceAccoun
 				`${Video.view_count.toLocaleString()} views`,
 				'Organic',
 				'New',
-				CalculateOpportunityScore({
-					Platform: 'Twitch',
-					Kind: 'VOD',
-					PublishedAt: Video.created_at,
-					Views: Video.view_count,
-					Campaign: 'Organic',
-					Title: Video.title,
-					Status: 'New'
-				}, ScoreWeights),
+				Score,
 				false,
 				null,
 				Video.url,
-				Video.thumbnail_url ?? null,
+				ThumbnailUrl,
 				Video.created_at
 			]
 		);
@@ -200,8 +234,18 @@ async function TwitchGet<T extends { message?: string }>(Url: URL, ClientId: str
 	return Payload;
 }
 
-async function ContentExists(ExternalId: string) {
-	return Boolean(await Get('select 1 from content_items where external_id = ? limit 1', [ExternalId]));
+async function ContentId(ExternalId: string) {
+	const Row = await Get<{ id: number }>('select id from content_items where external_id = ? limit 1', [ExternalId]);
+	return Row?.id ?? 0;
+}
+
+async function UpdateExistingContent(Id: number, Item: ExistingContentUpdate) {
+	await Run(
+		`update content_items
+		 set title = ?, age = ?, metric = ?, score = ?, live = ?, source_url = ?, thumbnail_url = coalesce(?, thumbnail_url), published_at = ?
+		 where id = ?`,
+		[Item.Title, Item.Age, Item.Metric, Item.Score, Item.Live, Item.SourceUrl, Item.ThumbnailUrl, Item.PublishedAt, Id]
+	);
 }
 
 async function FinishRun(Id: number, Status: string, ItemsFound: number, Message: string) {
@@ -224,4 +268,15 @@ type SourceAccount = {
 	Id: number;
 	Creator: string;
 	ExternalId: string;
+};
+
+type ExistingContentUpdate = {
+	Title: string;
+	Age: string;
+	Metric: string;
+	Score: number;
+	Live: boolean;
+	SourceUrl: string;
+	ThumbnailUrl: string | null;
+	PublishedAt: string;
 };

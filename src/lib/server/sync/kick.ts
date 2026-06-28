@@ -2,6 +2,8 @@ import { All, EnsureAppDatabaseReady, Get, NextId, Run } from '$lib/server/db/ap
 import { CalculateOpportunityScore, type OpportunityWeights } from '$lib/opportunity-score';
 import { GetApiCredential } from '$lib/server/api-credentials';
 import { GetOpportunityWeights } from '$lib/server/opportunity-settings';
+import { ResolveKickSourceIds } from '$lib/server/source-id-resolver';
+import { ResolveThumbnailUrl } from '$lib/server/thumbnails';
 
 type KickTokenResponse = { access_token?: string; message?: string };
 type KickLivestreamResponse = {
@@ -34,6 +36,7 @@ export async function SyncKickLivestreams() {
 		await FinishRun(RunId, 'Skipped', 0, 'Missing KICK_CLIENT_ID or KICK_CLIENT_SECRET');
 		return { Status: 'Skipped', ItemsFound: 0, Message: 'Missing KICK_CLIENT_ID or KICK_CLIENT_SECRET' };
 	}
+	await ResolveKickSourceIds();
 
 	const Accounts = await All<KickAccount>(
 		`select id as "Id", creator as "Creator", external_id as "ExternalId", handle as "Handle"
@@ -109,7 +112,31 @@ async function SyncAccount(
 	let Count = 0;
 	for (const Stream of Payload.data ?? []) {
 		const ExternalId = `kick-live-${Stream.broadcaster_user_id}-${Stream.started_at}`;
-		if (await ContentExists(ExternalId)) continue;
+		const SourceUrl = `https://kick.com/${Stream.slug || Account.Handle.replace(/^@/, '')}`;
+		const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, Stream.thumbnail ?? Stream.category?.thumbnail);
+		const Score = CalculateOpportunityScore({
+			Platform: 'Kick',
+			Kind: 'Live stream',
+			PublishedAt: Stream.started_at,
+			Viewers: Stream.viewer_count,
+			Campaign: 'Organic',
+			Title: Stream.stream_title,
+			Status: 'New'
+		}, ScoreWeights);
+		const ExistingId = await ContentId(ExternalId);
+		if (ExistingId) {
+			await UpdateExistingContent(ExistingId, {
+				Title: Stream.stream_title,
+				Age: FormatAge(Stream.started_at),
+				Metric: `${Stream.viewer_count.toLocaleString()} watching`,
+				Score,
+				Live: true,
+				SourceUrl,
+				ThumbnailUrl,
+				PublishedAt: Stream.started_at
+			});
+			continue;
+		}
 		await Run(
 			`insert into content_items
 			 (id, creator, external_id, platform, kind, title, age, metric, campaign, status, score, live, velocity, source_url, thumbnail_url, published_at)
@@ -125,19 +152,11 @@ async function SyncAccount(
 				`${Stream.viewer_count.toLocaleString()} watching`,
 				'Organic',
 				'New',
-				CalculateOpportunityScore({
-					Platform: 'Kick',
-					Kind: 'Live stream',
-					PublishedAt: Stream.started_at,
-					Viewers: Stream.viewer_count,
-					Campaign: 'Organic',
-					Title: Stream.stream_title,
-					Status: 'New'
-				}, ScoreWeights),
+				Score,
 				true,
 				null,
-				`https://kick.com/${Stream.slug || Account.Handle.replace(/^@/, '')}`,
-				Stream.thumbnail ?? Stream.category?.thumbnail ?? null,
+				SourceUrl,
+				ThumbnailUrl,
 				Stream.started_at
 			]
 		);
@@ -158,8 +177,18 @@ async function KickGet<T extends { message?: string }>(Url: URL, ClientId: strin
 	return Payload;
 }
 
-async function ContentExists(ExternalId: string) {
-	return Boolean(await Get('select 1 from content_items where external_id = ? limit 1', [ExternalId]));
+async function ContentId(ExternalId: string) {
+	const Row = await Get<{ id: number }>('select id from content_items where external_id = ? limit 1', [ExternalId]);
+	return Row?.id ?? 0;
+}
+
+async function UpdateExistingContent(Id: number, Item: ExistingContentUpdate) {
+	await Run(
+		`update content_items
+		 set title = ?, age = ?, metric = ?, score = ?, live = ?, source_url = ?, thumbnail_url = coalesce(?, thumbnail_url), published_at = ?
+		 where id = ?`,
+		[Item.Title, Item.Age, Item.Metric, Item.Score, Item.Live, Item.SourceUrl, Item.ThumbnailUrl, Item.PublishedAt, Id]
+	);
 }
 
 async function FinishRun(Id: number, Status: string, ItemsFound: number, Message: string) {
@@ -183,4 +212,15 @@ type KickAccount = {
 	Creator: string;
 	ExternalId: string;
 	Handle: string;
+};
+
+type ExistingContentUpdate = {
+	Title: string;
+	Age: string;
+	Metric: string;
+	Score: number;
+	Live: boolean;
+	SourceUrl: string;
+	ThumbnailUrl: string | null;
+	PublishedAt: string;
 };

@@ -4,6 +4,7 @@ import { CalculateOpportunityScore } from '$lib/opportunity-score';
 import { GetOpportunityWeights } from '$lib/server/opportunity-settings';
 import { ActorFromForm, MarkClipTaskAction, MarkContentAction, WriteActivity } from '$lib/server/activity';
 import { ApiCredentialFields, GetApiCredentialStatuses } from '$lib/server/api-credentials';
+import { NormalizeThumbnailUrl } from '$lib/server/thumbnails';
 import { fail, type Actions } from '@sveltejs/kit';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -256,9 +257,9 @@ export const actions: Actions = {
 		const Creator = RequiredText(Form, 'Creator');
 		const Platform = RequiredText(Form, 'Platform');
 		const Handle = RequiredText(Form, 'Handle');
-		const ExternalId = RequiredText(Form, 'ExternalId');
-		if (!Creator || !Platform || !Handle || !ExternalId) {
-			return fail(400, { Message: 'Creator, platform, handle, and external id are required' });
+		const ExternalId = OptionalText(Form, 'ExternalId', Handle);
+		if (!Creator || !Platform || !Handle) {
+			return fail(400, { Message: 'Source name, platform, and handle are required' });
 		}
 		if (!['YouTube', 'Twitch', 'Kick', 'TikTok', 'Instagram', 'X'].includes(Platform)) {
 			return fail(400, { Message: 'Unsupported platform' });
@@ -363,9 +364,9 @@ export const actions: Actions = {
 		const Creator = RequiredText(Form, 'Creator');
 		const Platform = RequiredText(Form, 'Platform');
 		const Handle = RequiredText(Form, 'Handle');
-		const ExternalId = RequiredText(Form, 'ExternalId');
-		if (!Id || !Creator || !Platform || !Handle || !ExternalId) {
-			return fail(400, { Message: 'Source account id, creator, platform, handle, and external id are required' });
+		const ExternalId = OptionalText(Form, 'ExternalId', Handle);
+		if (!Id || !Creator || !Platform || !Handle) {
+			return fail(400, { Message: 'Source account id, source name, platform, and handle are required' });
 		}
 		if (!['YouTube', 'Twitch', 'Kick', 'TikTok', 'Instagram', 'X'].includes(Platform)) {
 			return fail(400, { Message: 'Unsupported platform' });
@@ -373,9 +374,9 @@ export const actions: Actions = {
 
 		await Run(
 			`update platform_accounts
-			 set creator = ?, platform = ?, handle = ?, external_id = ?, source_url = ?, connected = 0, last_error = null
+			 set creator = ?, platform = ?, handle = ?, external_id = ?, source_url = ?, connected = ?, last_error = null
 			 where id = ?`,
-			[Creator, Platform, Handle, ExternalId, OptionalText(Form, 'SourceUrl', DefaultSourceUrl(Platform, Handle)), Id]
+			[Creator, Platform, Handle, ExternalId, OptionalText(Form, 'SourceUrl', DefaultSourceUrl(Platform, Handle)), false, Id]
 		);
 		await WriteActivity(Actor, { EntityType: 'SourceAccount', EntityId: Id, Action: 'Updated source' });
 		return { Updated: 'SourceAccount' };
@@ -644,16 +645,6 @@ function SuggestedHook(Title: string) {
 	const CleanTitle = Title.trim();
 	if (!CleanTitle) return 'clip this moment';
 	return CleanTitle.length > 72 ? `${CleanTitle.slice(0, 69)}...` : CleanTitle;
-}
-
-function NormalizeThumbnailUrl(Url?: string | null) {
-	if (!Url) return null;
-	return Url
-		.replace(/^\/\//, 'https://')
-		.replaceAll('{width}', '640')
-		.replaceAll('{height}', '360')
-		.replaceAll('%{width}', '640')
-		.replaceAll('%{height}', '360');
 }
 
 type ContentRow = {

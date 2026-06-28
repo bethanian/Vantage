@@ -130,6 +130,11 @@
 		NeedsActor = !SavedActor;
 	});
 
+	$effect(() => {
+		data.ClipTasks;
+		QueueState = InitialQueueState();
+	});
+
 	function MatchesFeedFilter(Item: ContentItem, Filter: string) {
 		if (Filter === 'All') return true;
 		if (Filter === 'Live now') return Item.Live;
@@ -833,7 +838,7 @@
 						<option>X</option>
 					</select>
 					<input name="Handle" placeholder="@handle" required />
-					<input name="ExternalId" placeholder="Channel/user id or manual key" required />
+					<input name="ExternalId" placeholder="Channel/user id optional" />
 					<input name="SourceUrl" placeholder="Source URL optional" />
 					<button class="PrimaryButton"><i class="ti ti-plus"></i>Add source</button>
 				</form>
