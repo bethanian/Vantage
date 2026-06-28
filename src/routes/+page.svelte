@@ -15,10 +15,30 @@
 
 	let { data }: { data: PageData } = $props();
 
+	let ActiveView = $state<ViewName>('Feed');
+	let ActiveFeedFilter = $state('All');
+	let FeedSearch = $state('');
+	let SourceSearch = $state('');
+	let ActiveQueueFilter = $state('All');
+	let SortMode = $state('Opportunity score');
+	let ContentState = $state<ContentItem[]>(InitialContentState());
+	let QueueState = $state<ClipTask[]>(InitialQueueState());
+	let IsSyncingYoutube = $state(false);
+	let IsSyncingTwitch = $state(false);
+	let IsSyncingKick = $state(false);
+	let IsSyncingAll = $state(false);
+	let IsResolvingSources = $state(false);
+	let ActorName = $state('');
+	let ActorDraft = $state('');
+	let NeedsActor = $state(true);
+	let SelectedFeedItemId = $state<number | null>(null);
+	let ShowManualQueueForm = $state(false);
+	let FailedThumbnailIds = $state<Set<number>>(new Set());
+
 	const ApiCredentials = $derived(data.ApiCredentials);
 	const AppSettings = $derived(data.AppSettings);
 	const ClipTasks = $derived(data.ClipTasks);
-	const ContentItems = $derived(data.ContentItems);
+	const ContentItems = $derived(ContentState);
 	const PlatformAccounts = $derived(data.PlatformAccounts);
 	const SavedSearches = $derived(data.SavedSearches.filter((Search) => !/whop|clipping\.?net/i.test(Search.Query)));
 	const SyncRuns = $derived(data.SyncRuns);
@@ -43,35 +63,8 @@
 				{ Label: 'YouTube', Icon: 'ti-brand-youtube', Filter: 'YouTube', Count: PlatformCount('YouTube') },
 				{ Label: 'TikTok', Icon: 'ti-brand-tiktok', Filter: 'TikTok', Count: PlatformCount('TikTok') }
 			]
-		},
-		{
-			Label: 'Workflow',
-			Items: [
-				{ Label: 'Fresh', Icon: 'ti-sparkles', Filter: 'New', Count: ContentItems.filter((Item) => Item.Status === 'New').length },
-				{ Label: 'Queued sources', Icon: 'ti-list-check', Filter: 'Queue', Count: ClipTasks.length },
-				{ Label: 'Rejected', Icon: 'ti-circle-x', Filter: 'Rejected', Count: ContentItems.filter((Item) => Item.Status === 'Rejected').length }
-			]
 		}
 	]);
-
-	let ActiveView = $state<ViewName>('Feed');
-	let ActiveFeedFilter = $state('All');
-	let FeedSearch = $state('');
-	let SourceSearch = $state('');
-	let ActiveQueueFilter = $state('All');
-	let SortMode = $state(SortModes[0]);
-	let QueueState = $state<ClipTask[]>(InitialQueueState());
-	let IsSyncingYoutube = $state(false);
-	let IsSyncingTwitch = $state(false);
-	let IsSyncingKick = $state(false);
-	let IsSyncingAll = $state(false);
-	let IsResolvingSources = $state(false);
-	let ActorName = $state('');
-	let ActorDraft = $state('');
-	let NeedsActor = $state(true);
-	let SelectedFeedItemId = $state<number | null>(null);
-	let ShowManualQueueForm = $state(false);
-	let FailedThumbnailIds = $state<Set<number>>(new Set());
 
 	const LiveCount = $derived(ContentItems.filter((Item) => Item.Live).length);
 	const HandledCount = $derived(ContentItems.filter((Item) => ['Watched', 'Clipped', 'Uploaded', 'Rejected'].includes(Item.Status)).length);
@@ -135,6 +128,11 @@
 		QueueState = InitialQueueState();
 	});
 
+	$effect(() => {
+		data.ContentItems;
+		ContentState = InitialContentState();
+	});
+
 	function MatchesFeedFilter(Item: ContentItem, Filter: string) {
 		if (Filter === 'All') return true;
 		if (Filter === 'Live now') return Item.Live;
@@ -184,6 +182,10 @@
 			Targets: { ...Task.Targets },
 			UploadUrls: { ...Task.UploadUrls }
 		}));
+	}
+
+	function InitialContentState() {
+		return data.ContentItems.map((Item) => ({ ...Item }));
 	}
 
 	function SetSidebarFilter(Filter: string) {
@@ -252,9 +254,13 @@
 		return `${Action} - ${Actor}`;
 	}
 
+	function CurrentActor() {
+		return ActorName || ActorDraft || 'Someone';
+	}
+
 	function FormFeedback(Label: string, SuccessText = 'saved'): SubmitFunction {
 		return ({ formData }) => {
-			formData.set('Actor', ActorName || ActorDraft || 'Someone');
+			formData.set('Actor', CurrentActor());
 			return async ({ result, update }) => {
 			await update();
 			const Failed = result.type === 'failure' || result.type === 'error';
@@ -263,8 +269,73 @@
 		};
 	}
 
+	function QueueItemFeedback(Item: ContentItem, Mode: 'Add' | 'Remove'): SubmitFunction {
+		return ({ formData }) => {
+			const Actor = CurrentActor();
+			const PreviousQueue = QueueState;
+			const PreviousContent = ContentState;
+			formData.set('Actor', Actor);
+			if (Mode === 'Add') AddQueuedItemLocal(Item, Actor);
+			else RemoveQueuedItemLocal(Item, Actor);
+			return async ({ result, update }) => {
+				const Failed = result.type === 'failure' || result.type === 'error';
+				if (Failed) {
+					QueueState = PreviousQueue;
+					ContentState = PreviousContent;
+				}
+				await update();
+				PushToast(`Queue item ${Failed ? 'failed' : Mode === 'Add' ? 'saved' : 'removed'}`, Failed ? 'Error' : 'Success');
+			};
+		};
+	}
+
+	function AddQueuedItemLocal(Item: ContentItem, Actor: string) {
+		if (QueuedTaskForItem(Item)) return;
+		QueueState = [
+			...QueueState,
+			{
+				Id: -Date.now(),
+				Creator: Item.Creator,
+				Platform: Item.Platform,
+				Source: Item.Title,
+				SourceUrl: Item.SourceUrl,
+				Timestamp: '0:00',
+				Hook: SuggestedHook(Item.Title),
+				Score: Item.Score,
+				Status: 'To Clip',
+				Targets: { TikTok: true, Shorts: true, Reels: true },
+				UploadUrls: { TikTok: '', Shorts: '', Reels: '' },
+				LastAction: 'Queued',
+				LastActionBy: Actor,
+				LastActionAt: new Date().toISOString()
+			}
+		];
+		SetContentLocal(Item.Id, { Status: Item.Status === 'New' ? 'Watched' : Item.Status, LastAction: 'Queued', LastActionBy: Actor });
+	}
+
+	function RemoveQueuedItemLocal(Item: ContentItem, Actor: string) {
+		QueueState = QueueState.filter((Task) => {
+			if (Item.SourceUrl && Task.SourceUrl) return Task.SourceUrl !== Item.SourceUrl;
+			return Task.Creator !== Item.Creator || Task.Source !== Item.Title;
+		});
+		SetContentLocal(Item.Id, {
+			Status: Item.Status === 'Watched' ? 'New' : Item.Status,
+			LastAction: 'Removed from queue',
+			LastActionBy: Actor
+		});
+	}
+
+	function SetContentLocal(Id: number, Patch: Partial<ContentItem>) {
+		ContentState = ContentState.map((Item) => (Item.Id === Id ? { ...Item, ...Patch, LastActionAt: new Date().toISOString() } : Item));
+	}
+
+	function SuggestedHook(Title: string) {
+		const CleanTitle = Title.trim();
+		return CleanTitle.length > 72 ? `${CleanTitle.slice(0, 69)}...` : CleanTitle || 'clip this moment';
+	}
+
 	async function ToastedFetch(Url: string, Message: string) {
-		const Response = await fetch(Url, { method: 'POST', headers: { 'x-vantage-actor': ActorName || ActorDraft || 'Someone' } });
+		const Response = await fetch(Url, { method: 'POST', headers: { 'x-vantage-actor': CurrentActor() } });
 		const Payload = await Response.json().catch(() => ({} as { Message?: string; Status?: string }));
 		if (!Response.ok || Payload.Status === 'Failed') PushToast(Payload.Message ?? `${Message} failed`, 'Error');
 		else PushToast(Message, 'Success');
@@ -275,7 +346,7 @@
 		Task.Status = Status;
 		const Response = await fetch(`/api/clip-tasks/${Task.Id}`, {
 			method: 'PATCH',
-			headers: { 'content-type': 'application/json', 'x-vantage-actor': ActorName || ActorDraft || 'Someone' },
+			headers: { 'content-type': 'application/json', 'x-vantage-actor': CurrentActor() },
 			body: JSON.stringify({ Status })
 		});
 		if (!Response.ok) {
@@ -283,7 +354,7 @@
 			PushToast('Queue update failed', 'Error');
 		} else {
 			Task.LastAction = Status;
-			Task.LastActionBy = ActorName || ActorDraft || 'Someone';
+			Task.LastActionBy = CurrentActor();
 			Task.LastActionAt = new Date().toISOString();
 			PushToast('Queue status saved');
 		}
@@ -291,19 +362,17 @@
 
 	async function UpdateContentStatus(Item: ContentItem, Status: ItemStatus) {
 		const PreviousStatus = Item.Status;
-		Item.Status = Status;
+		SetContentLocal(Item.Id, { Status });
 		const Response = await fetch(`/api/content-items/${Item.Id}`, {
 			method: 'PATCH',
-			headers: { 'content-type': 'application/json', 'x-vantage-actor': ActorName || ActorDraft || 'Someone' },
+			headers: { 'content-type': 'application/json', 'x-vantage-actor': CurrentActor() },
 			body: JSON.stringify({ Status })
 		});
 		if (!Response.ok) {
-			Item.Status = PreviousStatus;
+			SetContentLocal(Item.Id, { Status: PreviousStatus });
 			PushToast('Feed status failed', 'Error');
 		} else {
-			Item.LastAction = Status;
-			Item.LastActionBy = ActorName || ActorDraft || 'Someone';
-			Item.LastActionAt = new Date().toISOString();
+			SetContentLocal(Item.Id, { Status, LastAction: Status, LastActionBy: CurrentActor() });
 			PushToast('Feed status saved');
 		}
 	}
@@ -420,8 +489,11 @@
 		{#if ActiveView === 'Feed'}
 			<section class="View">
 				<div class="ConnectBanner">
-					<i class="ti ti-plug-connected"></i>
-					<span>Sync social sources, scan fresh posts and streams, then queue only the clips worth working.</span>
+					<div>
+						<i class="ti ti-radar"></i>
+						<span>{IsSyncingAll ? 'Scanning sources now' : LatestSync ? `${LatestSync.Platform} ${LatestSync.Status.toLowerCase()} / ${ContentItems.length} feed items` : 'Sources ready to scan'}</span>
+					</div>
+					<button disabled={IsSyncingAll} onclick={SyncAll}><i class="ti ti-refresh"></i>{IsSyncingAll ? 'Syncing' : 'Sync now'}</button>
 					<button onclick={() => (ActiveView = 'Accounts')}>Manage accounts</button>
 				</div>
 
@@ -491,13 +563,16 @@
 										</div>
 										<h2>{Item.Creator}: {Item.Title}</h2>
 										<p>{Item.Metric} / {Item.Age}{Item.Velocity ? ` / ${Item.Velocity} velocity` : ''}</p>
-										<div class="ScoreBar"><span style={`width:${Item.Score}%`}></span></div>
-										<div class="ScoreLabel">opportunity {Item.Score} / 100</div>
+										<div class={`LeadScore ${ScoreClass(Item.Score)}`}>
+											<strong>{Item.Score}</strong>
+											<span>opportunity</span>
+										</div>
 									</button>
 									<div class="TriageActions">
 										{#each ContentStatusActions as Action}
 											<button class:Active={Item.Status === Action.Status} aria-label={Action.Label} onclick={() => UpdateContentStatus(Item, Action.Status)}>
 												<i class={`ti ${Action.Icon}`}></i>
+												<span>{Action.Label}</span>
 											</button>
 										{/each}
 									</div>
@@ -531,36 +606,42 @@
 											<span class="RowTitle">{Item.Title}</span>
 											<span class="RowMeta">
 												{Item.Age} / {Item.Kind} / {Item.Metric}
-												<span class="Tag">{IsQueued(Item) ? 'Queued' : Item.Status}</span>
+											</span>
+											<span class="RowChipLine">
+												<span class={`StatusChip ${IsQueued(Item) ? 'Queued' : Item.Status}`}>{IsQueued(Item) ? 'Queued' : Item.Status}</span>
 												{#if LatestAction(Item.LastAction, Item.LastActionBy)}<span class="ActionTag">{LatestAction(Item.LastAction, Item.LastActionBy)}</span>{/if}
 											</span>
 										</span>
 										<span class={`RowScore ${ScoreClass(Item.Score)}`}>{Item.Score}</span>
 									</button>
 									{#if Item.SourceUrl}
-										<a class="SourceLink" href={Item.SourceUrl} target="_blank" rel="noreferrer" aria-label={`Open ${Item.Title}`}>
+										<a class="SourceLink" href={Item.SourceUrl} target="_blank" rel="noreferrer" title="Open source" aria-label={`Open ${Item.Title}`}>
 											<i class="ti ti-external-link"></i>
+											<span>Open</span>
 										</a>
 									{/if}
 									<div class="RowTriageActions">
 										{#each ContentStatusActions as Action}
-											<button class:Active={Item.Status === Action.Status} aria-label={Action.Label} onclick={() => UpdateContentStatus(Item, Action.Status)}>
+											<button class:Active={Item.Status === Action.Status} title={Action.Label} aria-label={Action.Label} onclick={() => UpdateContentStatus(Item, Action.Status)}>
 												<i class={`ti ${Action.Icon}`}></i>
+												<span>{Action.Status === 'Watched' ? 'Review' : 'Reject'}</span>
 											</button>
 										{/each}
 									</div>
 									{#if QueuedTaskForItem(Item)}
-										<form method="POST" action="?/DeleteContentQueueItem" class="QueueSourceForm" use:enhance={FormFeedback('Queue item', 'removed')}>
+										<form method="POST" action="?/DeleteContentQueueItem" class="QueueSourceForm" use:enhance={QueueItemFeedback(Item, 'Remove')}>
 											<input type="hidden" name="ContentId" value={Item.Id} />
-											<button class="Danger" aria-label={`Remove ${Item.Title} from queue`}>
+											<button class="Danger" title="Remove from queue" aria-label={`Remove ${Item.Title} from queue`}>
 												<i class="ti ti-trash"></i>
+												<span>Remove</span>
 											</button>
 										</form>
 									{:else}
-										<form method="POST" action="?/AddContentToQueue" class="QueueSourceForm" use:enhance={FormFeedback('Queue item')}>
+										<form method="POST" action="?/AddContentToQueue" class="QueueSourceForm" use:enhance={QueueItemFeedback(Item, 'Add')}>
 											<input type="hidden" name="ContentId" value={Item.Id} />
-											<button aria-label={`Queue ${Item.Title}`}>
+											<button title="Queue to clip" aria-label={`Queue ${Item.Title}`}>
 												<i class="ti ti-list-plus"></i>
+												<span>Queue</span>
 											</button>
 										</form>
 									{/if}
@@ -589,10 +670,6 @@
 									<h2>{SelectedFeedItem.Title}</h2>
 									<p>{SelectedFeedItem.Creator} / {SelectedFeedItem.Metric} / {SelectedFeedItem.Age}</p>
 								</div>
-								<div class="SelectedFacts">
-									<div><span>Score</span><strong>{SelectedFeedItem.Score}</strong></div>
-									<div><span>Status</span><strong>{IsQueued(SelectedFeedItem) ? 'Queued' : SelectedFeedItem.Status}</strong></div>
-								</div>
 								<div class="SelectedActions">
 									{#if SelectedFeedItem.SourceUrl}
 										<a class="PrimaryButton" href={SelectedFeedItem.SourceUrl} target="_blank" rel="noreferrer">
@@ -600,20 +677,24 @@
 										</a>
 									{/if}
 									{#if QueuedTaskForItem(SelectedFeedItem)}
-										<form method="POST" action="?/DeleteContentQueueItem" use:enhance={FormFeedback('Queue item', 'removed')}>
+										<form method="POST" action="?/DeleteContentQueueItem" use:enhance={QueueItemFeedback(SelectedFeedItem, 'Remove')}>
 											<input type="hidden" name="ContentId" value={SelectedFeedItem.Id} />
 											<button class="PrimaryButton Danger">
 												<i class="ti ti-trash"></i>Remove from queue
 											</button>
 										</form>
 									{:else}
-										<form method="POST" action="?/AddContentToQueue" use:enhance={FormFeedback('Queue item')}>
+										<form method="POST" action="?/AddContentToQueue" use:enhance={QueueItemFeedback(SelectedFeedItem, 'Add')}>
 											<input type="hidden" name="ContentId" value={SelectedFeedItem.Id} />
 											<button class="PrimaryButton">
 												<i class="ti ti-list-plus"></i>Queue to clip
 											</button>
 										</form>
 									{/if}
+								</div>
+								<div class="SelectedFacts">
+									<div><span>Score</span><strong>{SelectedFeedItem.Score}</strong></div>
+									<div><span>Status</span><strong>{IsQueued(SelectedFeedItem) ? 'Queued' : SelectedFeedItem.Status}</strong></div>
 								</div>
 								<div class="SelectedNote">
 									<i class="ti ti-info-circle"></i>
@@ -663,7 +744,7 @@
 							{:else}
 								<div class="EmptyState MiniEmpty">
 									<i class="ti ti-inbox"></i>
-									<span>No clips queued.</span>
+									<span>No clips queued. Pick a feed item and press Queue to clip.</span>
 								</div>
 							{/each}
 						</div>
@@ -765,7 +846,7 @@
 					{:else}
 						<div class="EmptyState InlineEmpty">
 							<i class="ti ti-inbox"></i>
-							<span>No queue items match this filter.</span>
+							<span>No clips queued here. Go to Feed, pick a source, then press Queue to clip.</span>
 						</div>
 					{/each}
 				</div>
@@ -891,7 +972,7 @@
 										{:else}
 											<span class={Account.Connected ? 'ConnectedText' : 'Chip'}>{Account.Connected ? 'Connected' : 'Manual'}</span>
 										{/if}
-										<form method="POST" action="?/DeleteSourceAccount" class="InlineDelete" use:enhance={FormFeedback('Source account')}>
+										<form method="POST" action="?/DeleteSourceAccount" class="InlineDelete" use:enhance={FormFeedback('Source account', 'removed')}>
 											<input type="hidden" name="Id" value={Account.Id} />
 											<button aria-label={`Remove ${Account.Creator} ${Account.Platform}`}>
 												<i class="ti ti-trash"></i>Remove
@@ -1253,7 +1334,37 @@
 		padding: 8px 16px;
 	}
 
-	.ConnectBanner button,
+	.ConnectBanner div {
+		align-items: center;
+		display: flex;
+		gap: 8px;
+		min-width: 0;
+	}
+
+	.ConnectBanner button {
+		align-items: center;
+		background: var(--Page);
+		border: 1px solid #b0d0bc;
+		border-radius: 6px;
+		color: var(--Green);
+		display: inline-flex;
+		font-size: 12px;
+		gap: 6px;
+		padding: 5px 9px;
+	}
+
+	.ConnectBanner button:first-of-type {
+		background: var(--Green);
+		border-color: var(--Green);
+		color: white;
+		margin-left: auto;
+	}
+
+	.ConnectBanner button:disabled {
+		cursor: wait;
+		opacity: 0.68;
+	}
+
 	.PanelLabel button {
 		background: transparent;
 		border: 0;
@@ -1588,6 +1699,43 @@
 		height: 100%;
 	}
 
+	.LeadScore {
+		align-items: center;
+		background: var(--GreenSoft);
+		border: 1px solid #b0d0bc;
+		border-radius: 7px;
+		color: var(--Green);
+		display: flex;
+		justify-content: space-between;
+		margin-top: 14px;
+		padding: 8px 10px;
+	}
+
+	.LeadScore strong {
+		font-family: 'Fraunces', serif;
+		font-size: 24px;
+		font-weight: 400;
+	}
+
+	.LeadScore span {
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+	}
+
+	.LeadScore.Medium {
+		background: var(--AmberSoft);
+		border-color: color-mix(in srgb, var(--Amber) 35%, var(--Rule));
+		color: var(--Amber);
+	}
+
+	.LeadScore.Low {
+		background: var(--RuleSoft);
+		border-color: var(--Rule);
+		color: var(--Ink2);
+	}
+
 	.ScoreLabel,
 	.GoalLine {
 		color: var(--Ink3);
@@ -1677,7 +1825,7 @@
 		background: var(--Page);
 		border: 1px solid var(--RuleSoft);
 		border-radius: 7px;
-		padding: 8px;
+		padding: 7px 8px;
 	}
 
 	.SelectedFacts span {
@@ -1690,7 +1838,7 @@
 	.SelectedFacts strong {
 		display: block;
 		font-family: 'Fraunces', serif;
-		font-size: 20px;
+		font-size: 18px;
 		font-weight: 400;
 		margin-top: 2px;
 	}
@@ -1786,8 +1934,11 @@
 		border-left: 1px solid var(--RuleSoft);
 		color: var(--Ink3);
 		display: flex;
+		flex-direction: column;
+		font-size: 10px;
+		gap: 3px;
 		justify-content: center;
-		min-width: 42px;
+		min-width: 54px;
 		text-decoration: none;
 	}
 
@@ -1800,7 +1951,7 @@
 	.TriageActions {
 		border-top: 1px solid var(--RuleSoft);
 		display: grid;
-		grid-template-columns: repeat(3, 1fr);
+		grid-template-columns: repeat(2, 1fr);
 	}
 
 	.TriageActions button,
@@ -1808,7 +1959,12 @@
 		background: transparent;
 		border: 0;
 		color: var(--Ink3);
-		display: grid;
+		display: flex;
+		flex-direction: column;
+		font-size: 10px;
+		gap: 3px;
+		justify-content: center;
+		line-height: 1;
 		place-items: center;
 	}
 
@@ -1817,7 +1973,7 @@
 	}
 
 	.RowTriageActions button {
-		min-width: 34px;
+		min-width: 54px;
 	}
 
 	.TriageActions button + button,
@@ -1843,7 +1999,12 @@
 		border: 0;
 		border-left: 1px solid var(--RuleSoft);
 		color: var(--Ink3);
-		min-width: 42px;
+		display: flex;
+		flex-direction: column;
+		font-size: 10px;
+		gap: 3px;
+		justify-content: center;
+		min-width: 58px;
 	}
 
 	.SourceLink:hover,
@@ -1859,6 +2020,56 @@
 	.QueueSourceForm button.Danger:hover {
 		background: #f7e9e2;
 		color: #7f2f21;
+	}
+
+	.RowChipLine {
+		align-items: center;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin-top: 6px;
+	}
+
+	.StatusChip,
+	.ActionTag {
+		border-radius: 999px;
+		font-size: 10px;
+		font-weight: 700;
+		line-height: 1;
+		padding: 4px 7px;
+		text-transform: uppercase;
+		width: fit-content;
+	}
+
+	.StatusChip.New {
+		background: var(--GreenSoft);
+		color: var(--Green);
+	}
+
+	.StatusChip.Watched {
+		background: var(--BlueSoft);
+		color: var(--Blue);
+	}
+
+	.StatusChip.Rejected {
+		background: #f7e9e2;
+		color: #8c2a1e;
+	}
+
+	.StatusChip.Queued {
+		background: var(--AmberSoft);
+		color: var(--Amber);
+	}
+
+	.StatusChip.Uploaded,
+	.StatusChip.Clipped {
+		background: var(--RuleSoft);
+		color: var(--Ink2);
+	}
+
+	.ActionTag {
+		background: var(--RuleSoft);
+		color: var(--Ink2);
 	}
 
 	.QueueSourceLink {
@@ -2192,8 +2403,7 @@
 		color: var(--Amber);
 	}
 
-	.Tag,
-	.ActionTag {
+	.Tag {
 		background: var(--RuleSoft);
 		border-radius: 4px;
 		color: var(--Ink2);
@@ -2207,11 +2417,6 @@
 	.LiveTag {
 		background: var(--Green);
 		color: white;
-	}
-
-	.ActionTag {
-		background: var(--GreenSoft);
-		color: var(--Green);
 	}
 
 	.RightPanel {

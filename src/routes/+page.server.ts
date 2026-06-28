@@ -351,8 +351,17 @@ export const actions: Actions = {
 		const Actor = ActorFromForm(Form);
 		const Id = NumberField(Form, 'Id', 0);
 		if (!Id) return fail(400, { Message: 'Source account id is required' });
+		const Account = await Get<{ creator: string; platform: string }>('select creator, platform from platform_accounts where id = ? limit 1', [Id]);
+		if (!Account) return { Deleted: 'SourceAccount' };
 		await Run('delete from platform_accounts where id = ?', [Id]);
-		await WriteActivity(Actor, { EntityType: 'SourceAccount', EntityId: Id, Action: 'Removed source' });
+		await Run('delete from content_items where creator = ? and platform = ?', [Account.creator, Account.platform]);
+		await Run('delete from clip_tasks where creator = ? and platform = ?', [Account.creator, Account.platform]);
+		await WriteActivity(Actor, {
+			EntityType: 'SourceAccount',
+			EntityId: Id,
+			Action: 'Removed source',
+			Label: `Removed ${Account.platform} source - ${Actor}`
+		});
 		return { Deleted: 'SourceAccount' };
 	},
 
