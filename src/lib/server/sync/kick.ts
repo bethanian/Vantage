@@ -30,23 +30,23 @@ export async function SyncKickLivestreams() {
 		0
 	]);
 
-	const ClientId = await GetApiCredential('KICK_CLIENT_ID');
-	const ClientSecret = await GetApiCredential('KICK_CLIENT_SECRET');
-	if (!ClientId || !ClientSecret) {
-		await FinishRun(RunId, 'Skipped', 0, 'Missing KICK_CLIENT_ID or KICK_CLIENT_SECRET');
-		return { Status: 'Skipped', ItemsFound: 0, Message: 'Missing KICK_CLIENT_ID or KICK_CLIENT_SECRET' };
-	}
-	await ResolveKickSourceIds();
-
 	const Accounts = await All<KickAccount>(
 		`select id as "Id", creator as "Creator", external_id as "ExternalId", handle as "Handle", source_url as "SourceUrl"
 		 from platform_accounts where platform = ?`,
 		['Kick']
 	);
+	const ScoreWeights = await GetOpportunityWeights();
+	const ClientId = await GetApiCredential('KICK_CLIENT_ID');
+	const ClientSecret = await GetApiCredential('KICK_CLIENT_SECRET');
+	if (!ClientId || !ClientSecret) {
+		const ItemsFound = await UpsertKickFallbacks(Accounts, ScoreWeights);
+		await FinishRun(RunId, 'Completed', ItemsFound, `Kick API missing; refreshed ${ItemsFound} channel watches`);
+		return { Status: 'Completed', ItemsFound, Message: `Kick API missing; refreshed ${ItemsFound} channel watches` };
+	}
+	await ResolveKickSourceIds();
 
 	let ItemsFound = 0;
 	const Errors: string[] = [];
-	const ScoreWeights = await GetOpportunityWeights();
 
 	try {
 		const Token = await GetAppToken(ClientId, ClientSecret);
@@ -73,14 +73,21 @@ export async function SyncKickLivestreams() {
 		}
 	} catch (Reason) {
 		const Message = Reason instanceof Error ? Reason.message : 'Unknown Kick token error';
-		await FinishRun(RunId, 'Failed', 0, Message);
-		return { Status: 'Failed', ItemsFound: 0, Message };
+		ItemsFound += await UpsertKickFallbacks(Accounts, ScoreWeights);
+		await FinishRun(RunId, 'Partial', ItemsFound, `${Message}; refreshed channel watches`);
+		return { Status: 'Partial', ItemsFound, Message: `${Message}; refreshed channel watches` };
 	}
 
 	const Status = Errors.length ? 'Partial' : 'Completed';
 	const Message = Errors.join(' | ') || `Synced ${Accounts.length} Kick accounts`;
 	await FinishRun(RunId, Status, ItemsFound, Message);
 	return { Status, ItemsFound, Message };
+}
+
+async function UpsertKickFallbacks(Accounts: KickAccount[], ScoreWeights: OpportunityWeights) {
+	let Count = 0;
+	for (const Account of Accounts) Count += await UpsertKickChannelFallback(Account, ScoreWeights);
+	return Count;
 }
 
 async function GetAppToken(ClientId: string, ClientSecret: string) {
@@ -172,7 +179,7 @@ async function UpsertKickChannelFallback(Account: KickAccount, ScoreWeights: Opp
 	const ExternalId = `kick-channel-${Account.Id}`;
 	const Title = `Check ${Account.Creator} on Kick`;
 	const ThumbnailUrl = await ResolveThumbnailUrl(SourceUrl, null);
-	const Score = CalculateOpportunityScore({ Platform: 'Kick', Kind: 'Channel watch', Title, Status: 'New' }, ScoreWeights);
+	const Score = Math.max(66, CalculateOpportunityScore({ Platform: 'Kick', Kind: 'Channel watch', Title, Status: 'New' }, ScoreWeights));
 	const ExistingId = await ContentId(ExternalId);
 	if (ExistingId) {
 		await UpdateExistingContent(ExistingId, {

@@ -13,16 +13,30 @@ export async function GET({ params }) {
 	);
 	if (!Item) return new Response('', { status: 404 });
 	const Existing = NormalizeThumbnailUrl(Item.thumbnail_url);
-	if (Existing) throw redirect(302, Existing);
+	if (Existing && await ImageExists(Existing)) throw redirect(302, Existing);
 	const Resolved = await ResolveContentThumbnail({
 		Platform: Item.platform,
 		ExternalId: Item.external_id,
 		SourceUrl: Item.source_url,
-		ApiThumbnailUrl: Item.thumbnail_url
+		ApiThumbnailUrl: null
 	});
 	if (!Resolved) return new Response('', { status: 404 });
 	await Run('update content_items set thumbnail_url = ? where id = ?', [Resolved, Id]);
 	throw redirect(302, Resolved);
+}
+
+async function ImageExists(Url: string) {
+	try {
+		const Controller = new AbortController();
+		const Timeout = setTimeout(() => Controller.abort(), 4500);
+		const Response = await fetch(Url, { method: 'HEAD', signal: Controller.signal });
+		clearTimeout(Timeout);
+		if (Response.ok && Response.headers.get('content-type')?.startsWith('image/')) return true;
+		const Fallback = await fetch(Url, { headers: { range: 'bytes=0-64' } });
+		return Fallback.ok && Boolean(Fallback.headers.get('content-type')?.startsWith('image/'));
+	} catch {
+		return false;
+	}
 }
 
 type ThumbnailRow = {

@@ -230,6 +230,7 @@
 	}
 
 	function ThumbnailSrc(Item: ContentItem) {
+		if (Item.Platform === 'Twitch') return `/api/thumbnails/${Item.Id}`;
 		return Item.ThumbnailUrl || `/api/thumbnails/${Item.Id}`;
 	}
 

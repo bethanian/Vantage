@@ -30,7 +30,7 @@ export async function UpsertManualProfileItem(Account: ManualAccount, ScoreWeigh
 	const ExternalId = `manual-${Account.Platform.toLowerCase()}-${Account.Id}`;
 	const Title = `Check ${Account.Creator} on ${Account.Platform}`;
 	const ThumbnailUrl = await ResolveContentThumbnail({ Platform: Account.Platform, SourceUrl, ExternalId: Account.ExternalId });
-	const Score = CalculateOpportunityScore({ Platform: Account.Platform, Kind: 'Profile watch', Title, Status: 'New' }, Weights);
+	const Score = Math.max(62, CalculateOpportunityScore({ Platform: Account.Platform, Kind: 'Profile watch', Title, Status: 'New' }, Weights));
 	const Existing = await Get<{ id: number }>('select id from content_items where external_id = ? limit 1', [ExternalId]);
 	if (Existing) {
 		await Run(

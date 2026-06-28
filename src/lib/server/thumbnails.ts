@@ -30,7 +30,7 @@ export async function ResolveContentThumbnail(Input: ContentThumbnailInput) {
 	const YoutubeThumbnail = YoutubeThumbnailFromUrl(SourceUrl, ExternalId);
 	if (YoutubeThumbnail) return YoutubeThumbnail;
 	if (Platform === 'Twitch') {
-		const TwitchThumbnail = await TwitchThumbnailFromApi(ExternalId);
+		const TwitchThumbnail = await TwitchThumbnailFromApi(ExternalId, SourceUrl);
 		if (TwitchThumbnail) return TwitchThumbnail;
 	}
 	if (!SourceUrl) return null;
@@ -42,8 +42,8 @@ function YoutubeThumbnailFromUrl(SourceUrl?: string | null, ExternalId?: string 
 	return VideoId ? `https://i.ytimg.com/vi/${VideoId}/hqdefault.jpg` : null;
 }
 
-async function TwitchThumbnailFromApi(ExternalId?: string | null) {
-	const VideoId = ExternalId?.match(/^twitch-video-(\d+)$/)?.[1];
+async function TwitchThumbnailFromApi(ExternalId?: string | null, SourceUrl?: string | null) {
+	const VideoId = ExternalId?.match(/^twitch-video-(\d+)$/)?.[1] ?? SourceUrl?.match(/videos\/(\d+)/)?.[1];
 	if (!VideoId) return null;
 	const ClientId = await GetApiCredential('TWITCH_CLIENT_ID');
 	const ClientSecret = await GetApiCredential('TWITCH_CLIENT_SECRET');
