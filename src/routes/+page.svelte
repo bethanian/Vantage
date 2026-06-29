@@ -126,8 +126,11 @@
 		{ Key: 'ScoreStatusWeight', Label: 'Status penalty', Value: AppSettings.ScoreStatusWeight }
 	]);
 	type ToastKind = 'Success' | 'Error' | 'Info';
+	type SoundKind = 'Tap' | 'Success' | 'Error' | 'Queue' | 'Delete' | 'Sync';
 	let Toasts = $state<{ Id: number; Kind: ToastKind; Message: string }[]>([]);
 	let EditingTaskId = $state<number | null>(null);
+	let AudioContextInstance: AudioContext | null = null;
+	let LastSoundAt = 0;
 
 	onMount(() => {
 		const SavedActor = localStorage.getItem('VantageActorName') ?? '';
@@ -213,12 +216,14 @@
 	}
 
 	function SetSidebarFilter(Filter: string) {
+		PlaySound('Tap');
 		ActiveView = 'Feed';
 		ActiveFeedFilter = Filter;
 		IsSidebarOpen = false;
 	}
 
 	function SelectFeedItem(Item: ContentItem) {
+		if (SelectedFeedItemId !== Item.Id) PlaySound('Tap');
 		SelectedFeedItemId = Item.Id;
 	}
 
@@ -263,9 +268,77 @@
 	}
 
 	function PushToast(Message: string, Kind: ToastKind = 'Success') {
+		PlaySound(SoundForToast(Message, Kind));
 		const Id = Date.now() + Math.random();
 		Toasts = [...Toasts, { Id, Kind, Message }];
 		setTimeout(() => (Toasts = Toasts.filter((Toast) => Toast.Id !== Id)), 3200);
+	}
+
+	function SoundForToast(Message: string, Kind: ToastKind): SoundKind {
+		if (Kind === 'Error') return 'Error';
+		if (/queue item saved|queued/i.test(Message)) return 'Queue';
+		if (/removed|deleted|cleared/i.test(Message)) return 'Delete';
+		if (/synced|resolved|imported/i.test(Message)) return 'Sync';
+		return Kind === 'Info' ? 'Tap' : 'Success';
+	}
+
+	function GetAudioContext() {
+		if (typeof window === 'undefined') return null;
+		if (AudioContextInstance) return AudioContextInstance;
+		const AudioConstructor = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+		if (!AudioConstructor) return null;
+		AudioContextInstance = new AudioConstructor();
+		return AudioContextInstance;
+	}
+
+	function PlaySound(Kind: SoundKind) {
+		const NowMs = Date.now();
+		if (NowMs - LastSoundAt < 45) return;
+		LastSoundAt = NowMs;
+
+		const Context = GetAudioContext();
+		if (!Context) return;
+		if (Context.state === 'suspended') void Context.resume();
+
+		const Now = Context.currentTime;
+		const Sequences: Record<SoundKind, Array<[number, number, number, OscillatorType, number]>> = {
+			Tap: [[520, 0, 0.035, 'triangle', 0.018]],
+			Success: [
+				[520, 0, 0.055, 'sine', 0.028],
+				[780, 0.055, 0.085, 'sine', 0.032]
+			],
+			Error: [
+				[220, 0, 0.09, 'sawtooth', 0.026],
+				[164, 0.08, 0.12, 'sawtooth', 0.022]
+			],
+			Queue: [
+				[392, 0, 0.045, 'triangle', 0.025],
+				[588, 0.045, 0.075, 'triangle', 0.03]
+			],
+			Delete: [[180, 0, 0.11, 'triangle', 0.024]],
+			Sync: [
+				[330, 0, 0.045, 'sine', 0.023],
+				[495, 0.04, 0.055, 'sine', 0.026],
+				[660, 0.087, 0.07, 'sine', 0.028]
+			]
+		};
+
+		for (const [Frequency, Offset, Duration, Type, Volume] of Sequences[Kind]) {
+			const Oscillator = Context.createOscillator();
+			const Gain = Context.createGain();
+			const Start = Now + Offset;
+			const End = Start + Duration;
+
+			Oscillator.type = Type;
+			Oscillator.frequency.setValueAtTime(Frequency, Start);
+			Gain.gain.setValueAtTime(0.0001, Start);
+			Gain.gain.exponentialRampToValueAtTime(Volume, Start + 0.008);
+			Gain.gain.exponentialRampToValueAtTime(0.0001, End);
+			Oscillator.connect(Gain);
+			Gain.connect(Context.destination);
+			Oscillator.start(Start);
+			Oscillator.stop(End + 0.01);
+		}
 	}
 
 	function SaveActor() {
