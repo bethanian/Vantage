@@ -34,6 +34,7 @@
 	let SelectedFeedItemId = $state<number | null>(null);
 	let ShowManualQueueForm = $state(false);
 	let FailedThumbnailIds = $state<Set<number>>(new Set());
+	let IsSidebarOpen = $state(false);
 
 	const ApiCredentials = $derived(data.ApiCredentials);
 	const AppSettings = $derived(data.AppSettings);
@@ -214,6 +215,7 @@
 	function SetSidebarFilter(Filter: string) {
 		ActiveView = 'Feed';
 		ActiveFeedFilter = Filter;
+		IsSidebarOpen = false;
 	}
 
 	function SelectFeedItem(Item: ContentItem) {
@@ -486,7 +488,7 @@
 <nav class="Topnav">
 	<button class="Wordmark" onclick={() => (ActiveView = 'Feed')}>V<em>antage</em></button>
 	{#each Views as View}
-		<button class:Active={ActiveView === View} class="NavLink" onclick={() => (ActiveView = View)}>
+		<button class:Active={ActiveView === View} class="NavLink" onclick={() => ((ActiveView = View), (IsSidebarOpen = false))}>
 			{View.toLowerCase()}
 			{#if View === 'Queue'}<span class="Count">{QueueState.length}</span>{/if}
 		</button>
@@ -504,7 +506,8 @@
 </nav>
 
 <div class="Shell">
-	<aside class="Sidebar">
+	{#if IsSidebarOpen}<button class="SidebarScrim" aria-label="Close side menu" onclick={() => (IsSidebarOpen = false)}></button>{/if}
+	<aside class:Open={IsSidebarOpen} class="Sidebar">
 		{#each SidebarGroups as Group}
 			<div class="SidebarLabel">{Group.Label}</div>
 			{#each Group.Items as Item}
@@ -520,7 +523,7 @@
 			<div class="SidebarDivider"></div>
 		{/each}
 		<div class="SidebarBottom">
-			<button class="SidebarItem" onclick={() => (ActiveView = 'Accounts')}>
+			<button class="SidebarItem" onclick={() => ((ActiveView = 'Accounts'), (IsSidebarOpen = false))}>
 				<span><i class="ti ti-settings"></i>Settings</span>
 			</button>
 		</div>
@@ -559,16 +562,15 @@
 							</button>
 						{/if}
 					</div>
-					<form method="POST" action="?/AddSavedSearch" class="SaveSearchForm" use:enhance={FormFeedback('Search')}>
-						<input type="hidden" name="Query" value={FeedSearch.trim()} />
-						<button disabled={!FeedSearch.trim()} aria-label="Save search">
-							<i class="ti ti-bookmark-plus"></i>
-						</button>
-					</form>
-					<label for="SortMode">Sort by</label>
-					<select id="SortMode" bind:value={SortMode}>
-						{#each SortModes as Mode}<option>{Mode}</option>{/each}
-					</select>
+					<button class="SidebarToggle" aria-label="Open side menu" aria-expanded={IsSidebarOpen} onclick={() => (IsSidebarOpen = true)}>
+						<i class="ti ti-layout-sidebar-left-expand"></i>
+					</button>
+					<label class="SortControl" for="SortMode">
+						<span>Sort by</span>
+						<select id="SortMode" bind:value={SortMode}>
+							{#each SortModes as Mode}<option>{Mode}</option>{/each}
+						</select>
+					</label>
 				</div>
 				<div class="SavedSearchRow">
 					<span>saved searches</span>
@@ -1446,7 +1448,6 @@
 	}
 
 	.Chip:hover,
-	.SaveSearchForm button:hover,
 	.RowTriageActions button:hover,
 	.TriageActions button:hover {
 		border-color: var(--Ink3);
@@ -1514,19 +1515,40 @@
 		place-items: center;
 	}
 
-	.SaveSearchForm button {
+	.SidebarToggle {
+		align-items: center;
 		background: var(--Page);
 		border: 1px solid var(--Rule);
 		border-radius: 6px;
 		color: var(--Ink2);
-		display: grid;
-		height: 30px;
-		place-items: center;
-		width: 34px;
+		display: inline-flex;
+		font-size: 16px;
+		height: 31px;
+		justify-content: center;
+		width: 36px;
 	}
 
-	.SaveSearchForm button:disabled {
-		opacity: 0.45;
+	.SidebarToggle:hover {
+		border-color: var(--Ink3);
+		color: var(--Green);
+	}
+
+	.SortControl {
+		align-items: center;
+		display: inline-flex;
+		gap: 9px;
+		line-height: 1;
+		white-space: nowrap;
+	}
+
+	.SortControl span {
+		align-items: center;
+		display: inline-flex;
+		height: 31px;
+	}
+
+	.SidebarScrim {
+		display: none;
 	}
 
 	.SavedSearchRow {
@@ -3035,7 +3057,31 @@
 		}
 
 		.Sidebar {
-			display: none;
+			box-shadow: 18px 0 38px rgba(26, 25, 22, 0.22);
+			display: flex;
+			height: 100dvh;
+			left: 0;
+			max-width: min(82vw, 300px);
+			position: fixed;
+			top: 0;
+			transform: translateX(-105%);
+			transition: transform 180ms ease;
+			width: min(82vw, 300px);
+			z-index: 40;
+		}
+
+		.Sidebar.Open {
+			transform: translateX(0);
+		}
+
+		.SidebarScrim {
+			background: rgba(26, 25, 22, 0.34);
+			border: 0;
+			display: block;
+			inset: 0;
+			padding: 0;
+			position: fixed;
+			z-index: 35;
 		}
 
 		.Topnav {
@@ -3075,6 +3121,26 @@
 		.SearchWrap {
 			min-width: 0;
 			width: 100%;
+		}
+
+		.SidebarToggle {
+			height: 42px;
+			width: 46px;
+		}
+
+		.SortControl {
+			flex: 1;
+			justify-content: flex-start;
+			min-width: min(100%, 240px);
+		}
+
+		.SortControl span {
+			height: 42px;
+		}
+
+		.SortControl select {
+			flex: 1;
+			min-width: 0;
 		}
 
 		.SavedSearchRow {
