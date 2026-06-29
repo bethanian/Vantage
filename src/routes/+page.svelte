@@ -2971,8 +2971,15 @@
 	}
 
 	@media (max-width: 760px) {
+		:global(html),
 		:global(body) {
-			overflow: hidden;
+			height: auto;
+			min-height: 100%;
+		}
+
+		:global(body) {
+			overflow-x: hidden;
+			overflow-y: auto;
 			-webkit-text-size-adjust: 100%;
 		}
 
@@ -3022,7 +3029,9 @@
 		}
 
 		.Shell {
-			height: calc(100dvh - 48px);
+			display: block;
+			height: auto;
+			min-height: calc(100svh - 48px);
 		}
 
 		.Sidebar {
@@ -3074,9 +3083,17 @@
 			padding: 7px 10px;
 		}
 
+		.Main,
+		.View,
+		.ContentPanes {
+			display: block;
+			min-height: 0;
+		}
+
 		.Feed,
 		.PageScroll,
 		.QueueBoard {
+			overflow: visible;
 			padding: 10px;
 		}
 
