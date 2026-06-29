@@ -106,17 +106,32 @@ async function FetchImage(Url: string) {
 }
 
 function GeneratedFallback(Item: ThumbnailImageRow) {
+	const CreatorPath = CreatorFallbackPath(Item.creator);
+	if (CreatorPath) return RedirectFallback(CreatorPath);
 	const StaticPath = StaticFallbackPath(Item.platform);
-	if (StaticPath) {
-		return new Response(null, {
-			status: 302,
-			headers: {
-				...FallbackHeaders,
-				location: StaticPath
-			}
-		});
-	}
+	if (StaticPath) return RedirectFallback(StaticPath);
 	return AppLogoFallback();
+}
+
+function RedirectFallback(Location: string) {
+	return new Response(null, {
+		status: 302,
+		headers: {
+			...FallbackHeaders,
+			location: Location
+		}
+	});
+}
+
+function CreatorFallbackPath(Creator?: string | null) {
+	const Key = CreatorKey(Creator);
+	if (Key === 'clavicular' || Key === 'clavicular0') return '/creator-placeholders/clavicular.png?v=1';
+	if (Key === 'n3on' || Key === 'neon') return '/creator-placeholders/n3on.png?v=1';
+	return null;
+}
+
+function CreatorKey(Creator?: string | null) {
+	return (Creator ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 function StaticFallbackPath(Platform?: string | null) {

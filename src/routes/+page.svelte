@@ -2925,6 +2925,19 @@
 	}
 
 	@media (max-width: 1100px) {
+		.Topnav {
+			gap: 4px;
+			padding-inline: 10px;
+		}
+
+		.Wordmark {
+			margin-right: 10px;
+		}
+
+		.NavLink {
+			padding-inline: 10px;
+		}
+
 		.ContentPanes,
 		.AccountGrid,
 		.ApiKeyForm,
@@ -2958,6 +2971,60 @@
 	}
 
 	@media (max-width: 760px) {
+		:global(body) {
+			overflow: hidden;
+			-webkit-text-size-adjust: 100%;
+		}
+
+		button,
+		input,
+		select,
+		:global(textarea),
+		.PrimaryButton,
+		.Chip {
+			min-height: 38px;
+		}
+
+		.SyncButton,
+		.ActorPill,
+		.LiveDot {
+			min-height: 30px;
+			white-space: nowrap;
+		}
+
+		.Topnav {
+			height: 48px;
+			overscroll-behavior-x: contain;
+			padding-inline: 8px;
+			scrollbar-width: none;
+		}
+
+		.Topnav::-webkit-scrollbar {
+			display: none;
+		}
+
+		.Wordmark {
+			flex: 0 0 auto;
+			font-size: 18px;
+			margin-right: 6px;
+		}
+
+		.NavLink {
+			flex: 0 0 auto;
+			height: 48px;
+			padding-inline: 9px;
+		}
+
+		.NavSpacer,
+		.RefreshTag,
+		.Avatar {
+			display: none;
+		}
+
+		.Shell {
+			height: calc(100dvh - 48px);
+		}
+
 		.Sidebar {
 			display: none;
 		}
@@ -2969,11 +3036,62 @@
 		.Subheader {
 			align-items: flex-start;
 			flex-wrap: wrap;
+			gap: 8px;
+			padding: 9px 10px;
+		}
+
+		.SubheaderTitle {
+			flex: 1 0 100%;
+			font-size: 19px;
+			margin-right: 0;
+		}
+
+		.ConnectBanner {
+			align-items: stretch;
+			flex-wrap: wrap;
+			padding: 8px 10px;
+		}
+
+		.ConnectBanner div {
+			flex: 1 0 100%;
+		}
+
+		.ConnectBanner button,
+		.ConnectBanner button:first-of-type {
+			flex: 1 1 120px;
+			justify-content: center;
+			margin-left: 0;
 		}
 
 		.SearchWrap {
 			min-width: 0;
 			width: 100%;
+		}
+
+		.SavedSearchRow {
+			max-height: 92px;
+			overflow-y: auto;
+			padding: 7px 10px;
+		}
+
+		.Feed,
+		.PageScroll,
+		.QueueBoard {
+			padding: 10px;
+		}
+
+		.LeadGrid {
+			gap: 10px;
+			margin-bottom: 12px;
+		}
+
+		.LeadMain {
+			padding: 12px;
+		}
+
+		.LeadCell h2,
+		.SelectedMeta h2 {
+			font-size: 19px;
 		}
 
 		.RowThumb {
@@ -2989,6 +3107,22 @@
 
 		.FeedRow {
 			flex-wrap: wrap;
+		}
+
+		.FeedMain {
+			padding: 11px 10px;
+		}
+
+		.RowNum {
+			width: 18px;
+		}
+
+		.RowTitle {
+			overflow-wrap: anywhere;
+		}
+
+		.RowScore {
+			flex: 0 0 34px;
 		}
 
 		.SourceLink,
@@ -3015,6 +3149,7 @@
 
 		.RightPanel {
 			grid-template-columns: 1fr;
+			padding: 10px;
 		}
 
 		.SelectedActions {
@@ -3023,8 +3158,183 @@
 
 		.QuickForm,
 		.QuickForm.QueueForm,
+		.QuickForm.SourceAccountForm,
 		.InlineEditForm {
 			grid-template-columns: 1fr;
+		}
+
+		.QueueBoard {
+			grid-template-columns: minmax(0, 1fr);
+		}
+
+		.QueueWorkTop,
+		.QueueWorkActions,
+		.SourceActionRow,
+		.PageTitleRow {
+			align-items: stretch;
+			flex-direction: column;
+		}
+
+		.QueueWorkActions .StatusSelect {
+			margin-left: 0;
+		}
+
+		.QueueSourceLink,
+		.StatusSelect,
+		.QueueWorkActions .IconButton,
+		.QueueWorkActions .InlineDelete,
+		.QueueWorkActions .InlineDelete button,
+		.SourceActionRow div,
+		.SourceSearch,
+		.SourceActionRow .PrimaryButton,
+		.ImportBackupForm,
+		.ImportBackupForm label,
+		.ApiKeyForm button,
+		.PreferenceGrid button {
+			width: 100%;
+		}
+
+		.SourceActionRow div,
+		.CredentialList div,
+		.SyncList div {
+			align-items: stretch;
+			flex-direction: column;
+		}
+
+		.CredentialList strong {
+			margin-left: 0;
+		}
+
+		.AccountCard,
+		.PreferenceGrid label,
+		.ApiKeyPanel,
+		.SourceGroup {
+			padding: 12px;
+		}
+
+		.AccountTop {
+			align-items: center;
+		}
+	}
+
+	@media (max-width: 520px) {
+		.Topnav {
+			gap: 2px;
+		}
+
+		.Wordmark {
+			font-size: 17px;
+		}
+
+		.NavLink {
+			font-size: 12px;
+			padding-inline: 8px;
+		}
+
+		.ActorPill,
+		.SyncButton,
+		.LiveDot {
+			font-size: 10px;
+			padding-inline: 8px;
+		}
+
+		.LiveDot {
+			display: none;
+		}
+
+		.FeedList .SectionHead {
+			padding: 11px 10px;
+		}
+
+		.FeedMain {
+			display: grid;
+			gap: 8px;
+			grid-template-columns: 18px 82px minmax(0, 1fr) 34px;
+			width: 100%;
+		}
+
+		.RowThumb {
+			flex-basis: auto;
+			width: 82px;
+		}
+
+		.RowBody {
+			align-content: start;
+		}
+
+		.RowCreator {
+			letter-spacing: 0.06em;
+		}
+
+		.RowTitle {
+			font-size: 13px;
+			line-height: 1.25;
+		}
+
+		.RowMeta {
+			font-size: 11px;
+			line-height: 1.3;
+		}
+
+		.SelectedFacts,
+		.StatGrid {
+			grid-template-columns: 1fr;
+		}
+
+		.ActorOverlay {
+			align-items: end;
+			padding: 12px;
+		}
+
+		.ActorPrompt {
+			width: 100%;
+		}
+
+		.ActorPromptActions {
+			display: grid;
+			grid-template-columns: 1fr;
+		}
+
+		.ToastStack {
+			left: 10px;
+			right: 10px;
+			top: 56px;
+			width: auto;
+		}
+	}
+
+	@media (max-width: 380px) {
+		.RowThumb {
+			width: 68px;
+		}
+
+		.FeedMain {
+			grid-template-columns: 16px 68px minmax(0, 1fr) 32px;
+		}
+
+		.RowScore {
+			height: 32px;
+			width: 32px;
+		}
+
+		.Chip,
+		select,
+		input,
+		:global(textarea) {
+			font-size: 12px;
+		}
+
+		.ActorPill,
+		.SyncButton {
+			font-size: 0;
+			justify-content: center;
+			padding-inline: 0;
+			width: 34px;
+		}
+
+		.ActorPill i,
+		.SyncButton i {
+			font-size: 15px;
 		}
 	}
 </style>
