@@ -1,6 +1,27 @@
 export type Platform = 'Kick' | 'Twitch' | 'YouTube' | 'TikTok' | 'Instagram' | 'X';
 export type ItemStatus = 'New' | 'Watched' | 'Clipped' | 'Uploaded' | 'Rejected';
-export type ViewName = 'Feed' | 'Queue' | 'Accounts';
+export type ViewName = 'Feed' | 'Creators' | 'Queue' | 'Best Clips' | 'Campaigns' | 'Accounts';
+export type MediaJobStage =
+	| 'waiting'
+	| 'fetching source'
+	| 'downloading'
+	| 'recording livestream'
+	| 'extracting audio'
+	| 'analyzing media'
+	| 'retrieving transcript'
+	| 'generating transcript'
+	| 'analyzing topics'
+	| 'detecting candidate clips'
+	| 'scoring clips'
+	| 'generating previews'
+	| 'ready for review'
+	| 'exporting'
+	| 'paused'
+	| 'completed'
+	| 'failed'
+	| 'requires manual review';
+
+export type ReviewStatus = 'Not required' | 'Needs source review' | 'Approved' | 'Rejected';
 
 export type ContentItem = {
 	Id: number;
@@ -39,6 +60,114 @@ export type ClipTask = {
 	LastAction?: string | null;
 	LastActionBy?: string | null;
 	LastActionAt?: string | null;
+};
+
+export type MediaJob = {
+	Id: number;
+	ClipTaskId?: number | null;
+	SourceUrl: string;
+	SourcePlatform: string;
+	VideoTitle: string;
+	ThumbnailUrl?: string | null;
+	Creator: string;
+	Duration: string;
+	MediaStatus: string;
+	Progress: number;
+	Priority: number;
+	Stage: MediaJobStage;
+	EstimatedFileSize: string;
+	ErrorMessage?: string | null;
+	ManualReviewStatus: ReviewStatus;
+	TranscriptText?: string | null;
+	TranscriptFormat?: string | null;
+	TranscriptLanguage?: string | null;
+	TranscriptConfidence?: number | null;
+	TranscriptModel?: string | null;
+	TranscriptSource?: string | null;
+	TranscriptSegmentsJson?: string | null;
+	TranscriptWordsJson?: string | null;
+	TranscriptTranslationText?: string | null;
+	TranscriptTranslationLanguage?: string | null;
+	TranscriptTranslationSource?: string | null;
+	TranscriptTranslationUpdatedAt?: string | null;
+	TranscriptUpdatedAt?: string | null;
+	OutputPath?: string | null;
+	AudioPath?: string | null;
+	ManualContext?: string | null;
+	SourceValidationStatus?: string | null;
+	LiveRecordingMode?: string | null;
+	LiveChunkSeconds?: number | null;
+	LiveAnalyzeWhileRecording?: boolean | null;
+	LiveGeneratePeriodicClips?: boolean | null;
+	LiveMarkedMomentsJson?: string | null;
+	AnalysisReportJson?: string | null;
+	AnalysisRequestJson?: string | null;
+	AnalysisUpdatedAt?: string | null;
+	MetadataJson?: string | null;
+	DownloadedAt?: string | null;
+	CancelledAt?: string | null;
+	CreatedAt: string;
+	UpdatedAt?: string | null;
+};
+
+export type ClipCandidate = {
+	Id: number;
+	MediaJobId: number;
+	ClipNumber: number;
+	Title?: string | null;
+	StartTime: string;
+	EndTime: string;
+	Duration: string;
+	ViralScore: number;
+	Category: string;
+	Explanation: string;
+	HookScore: number;
+	ContextScore: number;
+	EmotionScore: number;
+	HumorScore: number;
+	ControversyScore: number;
+	PayoffScore: number;
+	RetentionScore: number;
+	ShareabilityScore: number;
+	OriginalityScore: number;
+	Status: string;
+	Variant: string;
+	CutSegmentsJson?: string | null;
+	CaptionText?: string | null;
+	CaptionJson?: string | null;
+	CaptionStatus?: string | null;
+	ReviewNotes?: string | null;
+	CreatedAt: string;
+};
+
+export type ClipExport = {
+	Id: number;
+	MediaJobId: number;
+	ClipCandidateId?: number | null;
+	Preset: string;
+	Status: string;
+	Progress: number;
+	OutputPath?: string | null;
+	FileSize?: string | null;
+	ErrorMessage?: string | null;
+	CreatedAt: string;
+	UpdatedAt?: string | null;
+	CompletedAt?: string | null;
+};
+
+export type ClipPreview = {
+	Id: number;
+	MediaJobId: number;
+	ClipCandidateId: number;
+	Status: string;
+	Progress: number;
+	PreviewPath?: string | null;
+	ThumbnailPath?: string | null;
+	FileSize?: string | null;
+	ErrorMessage?: string | null;
+	CreatedAt: string;
+	UpdatedAt?: string | null;
+	CompletedAt?: string | null;
 };
 
 export type Creator = {
@@ -126,6 +255,19 @@ export type ActivityEvent = {
 	CreatedAt: string;
 };
 
+export type WorkerHeartbeat = {
+	Id: number;
+	InstanceId: string;
+	Role: string;
+	Workers: string;
+	Status: string;
+	Pid?: number | null;
+	Host?: string | null;
+	StartedAt: string;
+	LastSeenAt: string;
+	Message?: string | null;
+};
+
 export const ContentItems: ContentItem[] = [
 	{
 		Id: 1,
@@ -135,7 +277,7 @@ export const ContentItems: ContentItem[] = [
 		Title: "72-hour subathon crosses 150k concurrent viewers",
 		Age: '2h in',
 		Metric: '142k watching',
-		Campaign: 'Organic',
+		Campaign: 'Whop',
 		Status: 'New',
 		Score: 94,
 		Live: true,
@@ -149,7 +291,7 @@ export const ContentItems: ContentItem[] = [
 		Title: '$50k viewer pot challenge spikes during slots marathon',
 		Age: '45m in',
 		Metric: '89k watching',
-		Campaign: 'Organic',
+		Campaign: 'Clipping.net',
 		Status: 'New',
 		Score: 91,
 		Live: true,
@@ -175,7 +317,7 @@ export const ContentItems: ContentItem[] = [
 		Title: 'Celebrity guest confrontation goes fully unfiltered',
 		Age: '3h ago',
 		Metric: 'chat velocity high',
-		Campaign: 'Organic',
+		Campaign: 'Whop',
 		Status: 'New',
 		Score: 71
 	},
@@ -199,7 +341,7 @@ export const ContentItems: ContentItem[] = [
 		Title: 'Training with world cup pros goes completely wrong',
 		Age: '11h ago',
 		Metric: '14M channel',
-		Campaign: 'Organic',
+		Campaign: 'Clipping.net',
 		Status: 'New',
 		Score: 52
 	},
@@ -238,7 +380,7 @@ export const ClipTasks: ClipTask[] = [
 		Timestamp: '1:24:33',
 		Hook: 'nobody expected this to happen live on stream',
 		Score: 94,
-		Status: 'To Clip',
+		Status: 'Uploading',
 		Targets: { TikTok: true, Shorts: false, Reels: false },
 		UploadUrls: { TikTok: '', Shorts: '', Reels: '' }
 	},
@@ -250,7 +392,7 @@ export const ClipTasks: ClipTask[] = [
 		Timestamp: '0:47:12',
 		Hook: 'he won $50,000 on stream and this happened',
 		Score: 91,
-		Status: 'To Clip',
+		Status: 'Editing',
 		Targets: { TikTok: true, Shorts: true, Reels: false },
 		UploadUrls: { TikTok: '', Shorts: '', Reels: '' }
 	},
@@ -262,7 +404,7 @@ export const ClipTasks: ClipTask[] = [
 		Timestamp: '2:11:08',
 		Hook: 'bro actually hit this shot',
 		Score: 76,
-		Status: 'Finished',
+		Status: 'Done',
 		Targets: { TikTok: true, Shorts: true, Reels: true },
 		UploadUrls: { TikTok: '', Shorts: '', Reels: '' }
 	},
@@ -274,7 +416,7 @@ export const ClipTasks: ClipTask[] = [
 		Timestamp: '3:02:44',
 		Hook: "I can't believe he said this on stream",
 		Score: 71,
-		Status: 'To Clip',
+		Status: 'To clip',
 		Targets: { TikTok: false, Shorts: false, Reels: false },
 		UploadUrls: { TikTok: '', Shorts: '', Reels: '' }
 	},
@@ -286,7 +428,7 @@ export const ClipTasks: ClipTask[] = [
 		Timestamp: '1:08:17',
 		Hook: 'he had no idea this was coming',
 		Score: 58,
-		Status: 'To Clip',
+		Status: 'Watched',
 		Targets: { TikTok: false, Shorts: false, Reels: false },
 		UploadUrls: { TikTok: '', Shorts: '', Reels: '' }
 	}
@@ -297,19 +439,19 @@ export const Creators: Creator[] = [
 		Name: 'Kai Cenat',
 		Initial: 'K',
 		Platforms: ['Kick', 'Twitch', 'YouTube'],
-		Campaign: 'Organic',
+		Campaign: 'Whop',
 		LiveViewers: '142k',
 		Followers: '8.4M',
 		AverageScore: 94,
 		ClipsMade: 14,
 		Notes:
-			'Subathon moments tend to peak around hour 2-3. Best hooks: milestone reactions, chat moments, and unexpected guests.'
+			'Subathon moments tend to peak around hour 2-3. Best hooks: milestone reactions, chat moments, unexpected guests. Whop allows TikTok, Shorts, and Reels.'
 	},
 	{
 		Name: 'Trainwreckstv',
 		Initial: 'T',
 		Platforms: ['Kick', 'YouTube'],
-		Campaign: 'Organic',
+		Campaign: 'Clipping.net',
 		LiveViewers: '89k',
 		Followers: '2.2M',
 		AverageScore: 91,
@@ -329,4 +471,31 @@ export const Creators: Creator[] = [
 	}
 ];
 
-export const Campaigns: Campaign[] = [];
+export const Campaigns: Campaign[] = [
+	{
+		Name: 'Whop',
+		State: 'Active, renews monthly',
+		Rate: '$4 / 1k views',
+		Niche: 'Business / SaaS',
+		Earned: 180,
+		Goal: 300,
+		Submitted: 23,
+		Allowed: ['TikTok', 'YouTube Shorts', 'Instagram Reels', 'X'],
+		Rules: 'Keep edits native to each platform. Avoid misleading income claims and preserve creator context.',
+		HookRules: 'Lead with the surprising moment or payout reveal in the first two seconds.',
+		BannedTerms: 'guaranteed, risk-free, official partnership'
+	},
+	{
+		Name: 'Clipping.net',
+		State: 'Active, open-ended',
+		Rate: '$3.50 / 1k views',
+		Niche: 'Gaming / IRL',
+		Earned: 104,
+		Goal: 250,
+		Submitted: 11,
+		Allowed: ['TikTok', 'YouTube Shorts', 'Instagram Reels'],
+		Rules: 'Gaming and IRL clips only. No recycled watermarked reposts.',
+		HookRules: 'Start with the reaction, win, fail, or chat spike before adding setup.',
+		BannedTerms: 'giveaway, free money, sponsor confirmed'
+	}
+];

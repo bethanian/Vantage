@@ -1,5 +1,6 @@
 import { All, EnsureAppDatabaseReady, Get, Run } from '$lib/server/db/app-db';
 import { IsGenericThumbnailUrl, NormalizeThumbnailUrl, ResolveContentThumbnail, ResolveCreatorImage } from '$lib/server/thumbnails';
+import type { RequestHandler } from './$types';
 
 const CacheHeaders = {
 	'cache-control': 'public, max-age=3600, stale-while-revalidate=86400'
@@ -9,7 +10,7 @@ const FallbackHeaders = {
 	'cache-control': 'no-store'
 };
 
-export async function GET({ params }) {
+export const GET: RequestHandler = async ({ params }) => {
 	await EnsureAppDatabaseReady();
 	const Id = Number(params.id);
 	if (!Number.isFinite(Id) || Id <= 0) return new Response('', { status: 404 });
@@ -62,7 +63,7 @@ export async function GET({ params }) {
 	}
 
 	return GeneratedFallback(Item);
-}
+};
 
 async function FirstCreatorImage(Item: ThumbnailImageRow, Accounts: SourceAccountRow[]) {
 	for (const Account of [

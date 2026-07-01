@@ -1,8 +1,9 @@
 import { Get, Run, EnsureAppDatabaseReady } from '$lib/server/db/app-db';
 import { NormalizeThumbnailUrl, ResolveContentThumbnail } from '$lib/server/thumbnails';
 import { redirect } from '@sveltejs/kit';
+import type { RequestHandler } from './$types';
 
-export async function GET({ params }) {
+export const GET: RequestHandler = async ({ params }) => {
 	await EnsureAppDatabaseReady();
 	const Id = Number(params.id);
 	if (!Number.isFinite(Id) || Id <= 0) return new Response('', { status: 404 });
@@ -23,7 +24,7 @@ export async function GET({ params }) {
 	if (!Resolved) return new Response('', { status: 404 });
 	await Run('update content_items set thumbnail_url = ? where id = ?', [Resolved, Id]);
 	throw redirect(302, Resolved);
-}
+};
 
 async function ImageExists(Url: string) {
 	try {

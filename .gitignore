@@ -7,6 +7,7 @@ data
 .env
 .env.*
 !.env.example
+!.env.railway.example
 *.png
 !static/social-placeholders/*.png
 !static/creator-placeholders/*.png

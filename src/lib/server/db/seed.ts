@@ -1,9 +1,10 @@
-import { Campaigns, ClipTasks, Creators } from '$lib/vantage-data';
+import { Campaigns, ClipTasks, ContentItems, Creators } from '$lib/vantage-data';
 import { Db, Sqlite } from './index';
 import {
 	AppSettingsTable,
 	CampaignsTable,
 	ClipTasksTable,
+	ContentItemsTable,
 	CreatorsTable,
 	PlatformAccountsTable,
 	SavedSearchesTable
@@ -139,6 +140,127 @@ function CreateTables() {
 			label text not null,
 			created_at text not null
 		);
+
+		create table if not exists worker_heartbeats (
+			id integer primary key,
+			instance_id text not null,
+			role text not null,
+			workers text not null,
+			status text not null,
+			pid integer,
+			host text,
+			started_at text not null,
+			last_seen_at text not null,
+			message text
+		);
+
+		create table if not exists media_jobs (
+			id integer primary key,
+			clip_task_id integer,
+			source_url text not null,
+			source_platform text not null,
+			video_title text not null,
+			thumbnail_url text,
+			creator text not null,
+			duration text not null default 'unknown',
+			media_status text not null default 'unknown',
+			progress integer not null default 0,
+			priority integer not null default 0,
+			stage text not null default 'waiting',
+			estimated_file_size text not null default 'unknown',
+			error_message text,
+			manual_review_status text not null default 'Not required',
+			transcript_text text,
+			transcript_format text,
+			transcript_language text,
+			transcript_confidence real,
+			transcript_model text,
+			transcript_source text,
+			transcript_segments_json text,
+			transcript_words_json text,
+			transcript_translation_text text,
+			transcript_translation_language text,
+			transcript_translation_source text,
+			transcript_translation_updated_at text,
+			transcript_updated_at text,
+			output_path text,
+			audio_path text,
+			manual_context text,
+			source_validation_status text,
+			live_recording_mode text,
+			live_chunk_seconds integer,
+			live_analyze_while_recording integer not null default 0,
+			live_generate_periodic_clips integer not null default 0,
+			live_marked_moments_json text,
+			analysis_report_json text,
+			analysis_request_json text,
+			analysis_updated_at text,
+			metadata_json text,
+			downloaded_at text,
+			cancelled_at text,
+			created_at text not null,
+			updated_at text
+		);
+
+		create table if not exists clip_candidates (
+			id integer primary key,
+			media_job_id integer not null,
+			clip_number integer not null,
+			title text,
+			start_time text not null,
+			end_time text not null,
+			duration text not null,
+			viral_score integer not null,
+			category text not null,
+			explanation text not null,
+			hook_score integer not null,
+			context_score integer not null,
+			emotion_score integer not null,
+			humor_score integer not null,
+			controversy_score integer not null,
+			payoff_score integer not null,
+			retention_score integer not null,
+			shareability_score integer not null,
+			originality_score integer not null,
+			status text not null default 'Suggested',
+			variant text not null default 'strongest hook',
+			cut_segments_json text,
+			caption_text text,
+			caption_json text,
+			caption_status text,
+			review_notes text,
+			created_at text not null
+		);
+
+		create table if not exists clip_exports (
+			id integer primary key,
+			media_job_id integer not null,
+			clip_candidate_id integer,
+			preset text not null,
+			status text not null default 'waiting',
+			progress integer not null default 0,
+			output_path text,
+			file_size text,
+			error_message text,
+			created_at text not null,
+			updated_at text,
+			completed_at text
+		);
+
+		create table if not exists clip_previews (
+			id integer primary key,
+			media_job_id integer not null,
+			clip_candidate_id integer not null,
+			status text not null default 'waiting',
+			progress integer not null default 0,
+			preview_path text,
+			thumbnail_path text,
+			file_size text,
+			error_message text,
+			created_at text not null,
+			updated_at text,
+			completed_at text
+		);
 	`);
 	EnsureColumn('campaigns', 'rules', "text not null default ''");
 	EnsureColumn('campaigns', 'hook_rules', "text not null default ''");
@@ -155,10 +277,90 @@ function CreateTables() {
 	EnsureColumn('clip_tasks', 'last_action', 'text');
 	EnsureColumn('clip_tasks', 'last_action_by', 'text');
 	EnsureColumn('clip_tasks', 'last_action_at', 'text');
+	EnsureMediaJobColumns();
+	EnsureClipCandidateColumns();
+	EnsureClipExportColumns();
+	EnsureClipPreviewColumns();
 	SeedCreatorWatchlist();
 	SeedPlatformAccounts();
 	SeedSavedSearches();
 	SeedAppSettings();
+}
+
+function EnsureMediaJobColumns() {
+	EnsureColumn('media_jobs', 'clip_task_id', 'integer');
+	EnsureColumn('media_jobs', 'source_url', "text not null default ''");
+	EnsureColumn('media_jobs', 'source_platform', "text not null default 'Other'");
+	EnsureColumn('media_jobs', 'video_title', "text not null default 'Untitled source'");
+	EnsureColumn('media_jobs', 'thumbnail_url', 'text');
+	EnsureColumn('media_jobs', 'creator', "text not null default 'Unknown'");
+	EnsureColumn('media_jobs', 'duration', "text not null default 'unknown'");
+	EnsureColumn('media_jobs', 'media_status', "text not null default 'unknown'");
+	EnsureColumn('media_jobs', 'progress', 'integer not null default 0');
+	EnsureColumn('media_jobs', 'priority', 'integer not null default 0');
+	EnsureColumn('media_jobs', 'stage', "text not null default 'waiting'");
+	EnsureColumn('media_jobs', 'estimated_file_size', "text not null default 'unknown'");
+	EnsureColumn('media_jobs', 'error_message', 'text');
+	EnsureColumn('media_jobs', 'manual_review_status', "text not null default 'Not required'");
+	EnsureColumn('media_jobs', 'transcript_text', 'text');
+	EnsureColumn('media_jobs', 'transcript_format', 'text');
+	EnsureColumn('media_jobs', 'transcript_language', 'text');
+	EnsureColumn('media_jobs', 'transcript_confidence', 'real');
+	EnsureColumn('media_jobs', 'transcript_model', 'text');
+	EnsureColumn('media_jobs', 'transcript_source', 'text');
+	EnsureColumn('media_jobs', 'transcript_segments_json', 'text');
+	EnsureColumn('media_jobs', 'transcript_words_json', 'text');
+	EnsureColumn('media_jobs', 'transcript_translation_text', 'text');
+	EnsureColumn('media_jobs', 'transcript_translation_language', 'text');
+	EnsureColumn('media_jobs', 'transcript_translation_source', 'text');
+	EnsureColumn('media_jobs', 'transcript_translation_updated_at', 'text');
+	EnsureColumn('media_jobs', 'transcript_updated_at', 'text');
+	EnsureColumn('media_jobs', 'output_path', 'text');
+	EnsureColumn('media_jobs', 'audio_path', 'text');
+	EnsureColumn('media_jobs', 'manual_context', 'text');
+	EnsureColumn('media_jobs', 'source_validation_status', 'text');
+	EnsureColumn('media_jobs', 'live_recording_mode', 'text');
+	EnsureColumn('media_jobs', 'live_chunk_seconds', 'integer');
+	EnsureColumn('media_jobs', 'live_analyze_while_recording', 'integer not null default 0');
+	EnsureColumn('media_jobs', 'live_generate_periodic_clips', 'integer not null default 0');
+	EnsureColumn('media_jobs', 'live_marked_moments_json', 'text');
+	EnsureColumn('media_jobs', 'analysis_report_json', 'text');
+	EnsureColumn('media_jobs', 'analysis_request_json', 'text');
+	EnsureColumn('media_jobs', 'analysis_updated_at', 'text');
+	EnsureColumn('media_jobs', 'metadata_json', 'text');
+	EnsureColumn('media_jobs', 'downloaded_at', 'text');
+	EnsureColumn('media_jobs', 'cancelled_at', 'text');
+	EnsureColumn('media_jobs', 'created_at', "text not null default ''");
+	EnsureColumn('media_jobs', 'updated_at', 'text');
+}
+
+function EnsureClipCandidateColumns() {
+	EnsureColumn('clip_candidates', 'media_job_id', 'integer not null default 0');
+	EnsureColumn('clip_candidates', 'clip_number', 'integer not null default 1');
+	EnsureColumn('clip_candidates', 'title', 'text');
+	EnsureColumn('clip_candidates', 'start_time', "text not null default '0:00'");
+	EnsureColumn('clip_candidates', 'end_time', "text not null default '0:30'");
+	EnsureColumn('clip_candidates', 'duration', "text not null default '30s'");
+	EnsureColumn('clip_candidates', 'viral_score', 'integer not null default 50');
+	EnsureColumn('clip_candidates', 'category', "text not null default 'reaction'");
+	EnsureColumn('clip_candidates', 'explanation', "text not null default ''");
+	EnsureColumn('clip_candidates', 'hook_score', 'integer not null default 50');
+	EnsureColumn('clip_candidates', 'context_score', 'integer not null default 50');
+	EnsureColumn('clip_candidates', 'emotion_score', 'integer not null default 50');
+	EnsureColumn('clip_candidates', 'humor_score', 'integer not null default 50');
+	EnsureColumn('clip_candidates', 'controversy_score', 'integer not null default 50');
+	EnsureColumn('clip_candidates', 'payoff_score', 'integer not null default 50');
+	EnsureColumn('clip_candidates', 'retention_score', 'integer not null default 50');
+	EnsureColumn('clip_candidates', 'shareability_score', 'integer not null default 50');
+	EnsureColumn('clip_candidates', 'originality_score', 'integer not null default 50');
+	EnsureColumn('clip_candidates', 'status', "text not null default 'Suggested'");
+	EnsureColumn('clip_candidates', 'variant', "text not null default 'strongest hook'");
+	EnsureColumn('clip_candidates', 'cut_segments_json', 'text');
+	EnsureColumn('clip_candidates', 'caption_text', 'text');
+	EnsureColumn('clip_candidates', 'caption_json', 'text');
+	EnsureColumn('clip_candidates', 'caption_status', 'text');
+	EnsureColumn('clip_candidates', 'review_notes', 'text');
+	EnsureColumn('clip_candidates', 'created_at', "text not null default ''");
 }
 
 function SeedDatabase() {
@@ -183,12 +385,42 @@ function SeedDatabase() {
 			)
 			.run();
 
+		Db.insert(ContentItemsTable).values(ContentItems).run();
+
 		Db.insert(ClipTasksTable)
 			.values(ClipTasks.map((Task) => ({ ...Task, Targets: JSON.stringify(Task.Targets), UploadUrls: JSON.stringify(Task.UploadUrls) })))
 			.run();
 	});
 
 	Seed();
+}
+
+function EnsureClipExportColumns() {
+	EnsureColumn('clip_exports', 'media_job_id', 'integer not null default 0');
+	EnsureColumn('clip_exports', 'clip_candidate_id', 'integer');
+	EnsureColumn('clip_exports', 'preset', "text not null default 'original aspect ratio'");
+	EnsureColumn('clip_exports', 'status', "text not null default 'waiting'");
+	EnsureColumn('clip_exports', 'progress', 'integer not null default 0');
+	EnsureColumn('clip_exports', 'output_path', 'text');
+	EnsureColumn('clip_exports', 'file_size', 'text');
+	EnsureColumn('clip_exports', 'error_message', 'text');
+	EnsureColumn('clip_exports', 'created_at', "text not null default ''");
+	EnsureColumn('clip_exports', 'updated_at', 'text');
+	EnsureColumn('clip_exports', 'completed_at', 'text');
+}
+
+function EnsureClipPreviewColumns() {
+	EnsureColumn('clip_previews', 'media_job_id', 'integer not null default 0');
+	EnsureColumn('clip_previews', 'clip_candidate_id', 'integer not null default 0');
+	EnsureColumn('clip_previews', 'status', "text not null default 'waiting'");
+	EnsureColumn('clip_previews', 'progress', 'integer not null default 0');
+	EnsureColumn('clip_previews', 'preview_path', 'text');
+	EnsureColumn('clip_previews', 'thumbnail_path', 'text');
+	EnsureColumn('clip_previews', 'file_size', 'text');
+	EnsureColumn('clip_previews', 'error_message', 'text');
+	EnsureColumn('clip_previews', 'created_at', "text not null default ''");
+	EnsureColumn('clip_previews', 'updated_at', 'text');
+	EnsureColumn('clip_previews', 'completed_at', 'text');
 }
 
 function EnsureColumn(Table: string, Column: string, Type: string) {
@@ -371,7 +603,7 @@ function SeedCreatorWatchlist() {
 }
 
 function SeedSavedSearches() {
-	for (const Query of ['challenge', 'reaction', 'live stream']) {
+	for (const Query of ['Whop', 'challenge', 'reaction']) {
 		const Exists = Sqlite.prepare('select 1 from saved_searches where lower(query) = lower(?) limit 1').get(Query);
 		if (Exists) continue;
 		Db.insert(SavedSearchesTable)
