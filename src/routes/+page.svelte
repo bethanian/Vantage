@@ -2211,6 +2211,32 @@
 	button {
 		color: inherit;
 		cursor: pointer;
+		position: relative;
+		transition:
+			background-color 160ms ease,
+			border-color 160ms ease,
+			color 160ms ease,
+			opacity 160ms ease,
+			transform 160ms ease;
+	}
+
+	button:active {
+		transform: scale(0.97);
+	}
+
+	button::after {
+		background: currentColor;
+		border-radius: inherit;
+		content: '';
+		inset: 0;
+		opacity: 0;
+		pointer-events: none;
+		position: absolute;
+		transition: opacity 220ms ease;
+	}
+
+	button:active::after {
+		opacity: 0.08;
 	}
 
 	.Topnav {
@@ -2245,6 +2271,10 @@
 		gap: 7px;
 		height: 48px;
 		padding: 0 13px;
+	}
+
+	.NavLink:hover {
+		color: var(--Page);
 	}
 
 	.NavLink.Active {
@@ -2399,6 +2429,20 @@
 	.SidebarItem.Active,
 	.SidebarItem:hover {
 		background: var(--Page);
+		color: var(--Green);
+		transform: translateX(2px);
+	}
+
+	.SidebarItem i,
+	.PrimaryButton i,
+	.SyncButton i {
+		transition: color 160ms ease, transform 160ms ease;
+	}
+
+	.SidebarItem:hover i,
+	.PrimaryButton:hover i,
+	.SyncButton:hover i {
+		transform: translateX(2px);
 	}
 
 	.SidebarCount.Live {
@@ -2482,6 +2526,15 @@
 		color: var(--Page);
 	}
 
+	.Chip:hover,
+	.SavedSearchRow button:hover,
+	.RowTriageActions button:hover,
+	.TriageActions button:hover {
+		border-color: var(--Ink3);
+		color: var(--Green);
+		transform: translateY(-1px);
+	}
+
 	select,
 	input,
 	textarea {
@@ -2490,6 +2543,15 @@
 		border-radius: 6px;
 		color: var(--Ink);
 		padding: 6px 9px;
+		transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+	}
+
+	select:focus,
+	input:focus,
+	textarea:focus {
+		border-color: color-mix(in srgb, var(--Green) 55%, var(--Rule));
+		box-shadow: 0 0 0 3px rgba(43, 92, 58, 0.1);
+		outline: none;
 	}
 
 	.SearchWrap {
@@ -2632,6 +2694,10 @@
 		flex-direction: column;
 		overflow: hidden;
 		text-align: left;
+		transition:
+			border-color 180ms ease,
+			box-shadow 180ms ease,
+			transform 180ms ease;
 	}
 
 	.LeadMain {
@@ -2661,22 +2727,30 @@
 	.RowThumb img {
 		height: 100%;
 		object-fit: cover;
+		transition: transform 260ms ease;
 		width: 100%;
 	}
 
 	.LeadCell:hover,
 	.FeedRow:hover,
+	.FeedRow.Selected,
 	.QueueCard:hover {
 		border-color: var(--Ink3);
+		box-shadow: 0 10px 28px rgba(26, 25, 22, 0.08);
+		transform: translateY(-2px);
 	}
 
-	.LeadMain.Selected,
-	.FeedRow.Selected {
-		background: var(--Page);
+	.LeadMain.Selected {
+		box-shadow: inset 0 0 0 2px rgba(43, 92, 58, 0.18);
 	}
 
 	.FeedRow {
 		position: relative;
+		transition:
+			background-color 180ms ease,
+			border-color 180ms ease,
+			box-shadow 180ms ease,
+			transform 180ms ease;
 	}
 
 	.FeedRow::before {
@@ -2692,6 +2766,16 @@
 	.FeedRow.Selected::before {
 		opacity: 1;
 		width: 3px;
+	}
+
+	.FeedRow.Selected {
+		background: var(--Page);
+	}
+
+	.LeadCell:hover img,
+	.FeedRow:hover img,
+	.SelectedSourceCard:hover .SelectedMedia img {
+		transform: scale(1.04);
 	}
 
 	.Eyebrow,
@@ -2822,6 +2906,10 @@
 		justify-content: center;
 		min-width: 42px;
 		text-decoration: none;
+		transition:
+			background-color 160ms ease,
+			color 160ms ease,
+			transform 160ms ease;
 	}
 
 	.RowTriageActions {
@@ -2893,6 +2981,10 @@
 	.QueueSourceForm button:hover {
 		background: var(--Page);
 		color: var(--Ink);
+	}
+
+	.SourceLink:hover {
+		transform: translateY(-1px);
 	}
 
 	.QueueSourceForm button.Danger:hover {
@@ -3002,6 +3094,7 @@
 	}
 
 	.Toast {
+		animation: ToastIn 220ms ease both;
 		background: var(--Ink);
 		border: 1px solid #3f3c36;
 		border-radius: 8px;
@@ -3013,6 +3106,7 @@
 
 	.Toast.Success {
 		border-color: #8dbf9e;
+		box-shadow: 0 12px 30px rgba(43, 92, 58, 0.22);
 	}
 
 	.Toast.Error {
@@ -3021,6 +3115,17 @@
 
 	.Toast.Info {
 		border-color: #8aa5cf;
+	}
+
+	@keyframes ToastIn {
+		from {
+			opacity: 0;
+			transform: translateY(-8px) scale(0.98);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
 	}
 
 	.FeedRow.Static {
@@ -3134,6 +3239,7 @@
 	.SelectedMedia img {
 		height: 100%;
 		object-fit: cover;
+		transition: transform 260ms ease;
 		width: 100%;
 	}
 
@@ -3419,6 +3525,17 @@
 	.StatusSelect {
 		border-color: transparent;
 		font-weight: 600;
+		min-width: 112px;
+		transition:
+			background-color 180ms ease,
+			border-color 180ms ease,
+			color 180ms ease,
+			transform 180ms ease;
+	}
+
+	.StatusSelect:hover {
+		border-color: var(--Ink3);
+		transform: translateY(-1px);
 	}
 
 	.CreatorHeader {
