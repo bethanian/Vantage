@@ -37,14 +37,15 @@
 	const ActivityEvents = $derived(data.ActivityEvents);
 	const WorkerHeartbeats = $derived(data.WorkerHeartbeats as WorkerHeartbeat[]);
 
-	const Views: ViewName[] = ['Feed', 'Creators', 'Queue', 'Best Clips', 'Campaigns', 'Accounts'];
+	const Views: ViewName[] = ['Feed', 'Queue', 'Accounts'];
 	const FeedFilters = ['All', 'Live now', 'Whop', 'Clipping.net', 'Not clipped'];
 	const ContentStatusActions: { Status: ItemStatus; Icon: string; Label: string }[] = [
 		{ Status: 'Watched', Icon: 'ti-eye', Label: 'Mark watched' },
 		{ Status: 'Clipped', Icon: 'ti-scissors', Label: 'Mark clipped' },
 		{ Status: 'Rejected', Icon: 'ti-circle-x', Label: 'Reject' }
 	];
-	const QueueFilters = ['All', 'To upload', 'Editing', 'Done'];
+	const QueueFilters = ['All', 'To Clip', 'Finished', 'Uploaded'];
+	const QueueStatuses = QueueFilters.filter((Filter) => Filter !== 'All');
 	const SortModes = ['Opportunity score', 'Recency', 'Creator', 'Engagement velocity'];
 	const SidebarGroups = $derived([
 		{
@@ -85,6 +86,7 @@
 	let ActiveQueueFilter = $state('All');
 	let SortMode = $state(SortModes[0]);
 	let SelectedCreatorName = $state(InitialCreatorName());
+	let SelectedFeedItemId = $state<number | null>(null);
 	let SelectedMediaJobId = $state<number>(InitialMediaJobId());
 	let TranscriptSearch = $state('');
 	let QueueState = $state<ClipTask[]>(InitialQueueState());
@@ -103,6 +105,8 @@
 	let PreviewVolume = $state(0.85);
 	let PreviewSpeed = $state(1);
 	let TimelineZoom = $state(1);
+	let ShowManualQueueForm = $state(false);
+	let FailedThumbnailIds = $state<Set<number>>(new Set());
 
 	const SelectedCreator = $derived(
 		Creators.find((Creator) => Creator.Name === SelectedCreatorName) ?? Creators[0]
@@ -113,7 +117,19 @@
 	const AverageScore = $derived(ContentItems.length ? Math.round(ContentItems.reduce((Total, Item) => Total + Item.Score, 0) / ContentItems.length) : 0);
 	const UploadedCount = $derived(QueueState.filter((Task) => Object.values(Task.UploadUrls).some(Boolean) || Task.Status === 'Done').length);
 	const HandledCount = $derived(ContentItems.filter((Item) => ['Watched', 'Clipped', 'Uploaded', 'Rejected'].includes(Item.Status)).length);
+	const FreshCount = $derived(ContentItems.filter((Item) => Item.Status === 'New').length);
+	const FinishedCount = $derived(QueueState.filter((Task) => NormalizeQueueStatus(Task.Status) === 'Finished').length);
 	const ClippedCount = $derived(QueueState.length + ContentItems.filter((Item) => ['Clipped', 'Uploaded'].includes(Item.Status)).length);
+	const SyncedSourceCount = $derived(PlatformAccounts.filter((Account) => Account.Connected || Account.LastSyncedAt).length);
+	const ApiSourceCount = $derived(PlatformAccounts.filter((Account) => ['Kick', 'Twitch', 'YouTube'].includes(Account.Platform)).length);
+	const ManualSourceCount = $derived(PlatformAccounts.length - ApiSourceCount);
+	const QueueCreatorOptions = $derived.by(() => {
+		const Names = new Set<string>();
+		for (const Account of PlatformAccounts) Names.add(Account.Creator);
+		for (const Item of ContentItems) Names.add(Item.Creator);
+		for (const Task of QueueState) Names.add(Task.Creator);
+		return [...Names].sort((A, B) => A.localeCompare(B));
+	});
 	const UploadPlatformStats = $derived(
 		[
 			{ Platform: 'TikTok' as const, Key: 'TikTok' as const },
@@ -144,6 +160,7 @@
 		});
 	});
 	const LeadItems = $derived(FeedItems.slice(0, 3));
+	const SelectedFeedItem = $derived(FeedItems.find((Item) => Item.Id === SelectedFeedItemId) ?? FeedItems[0]);
 	const QueueItems = $derived(QueueState.filter((Task) => MatchesQueueFilter(Task, ActiveQueueFilter)));
 	const ExternalMediaJobs = $derived(MediaJobs.filter((Job) => !Job.ClipTaskId));
 	const SelectedMediaJob = $derived(MediaJobs.find((Job) => Job.Id === SelectedMediaJobId) ?? MediaJobs[0]);
@@ -220,8 +237,13 @@
 
 	function MatchesQueueFilter(Task: ClipTask, Filter: string) {
 		if (Filter === 'All') return true;
-		if (Filter === 'To upload') return Task.Status !== 'Done';
-		return Task.Status === Filter;
+		return NormalizeQueueStatus(Task.Status) === Filter;
+	}
+
+	function NormalizeQueueStatus(Status: string) {
+		if (Status === 'Done') return 'Finished';
+		if (['To upload', 'Editing', 'Uploading', 'Watched', 'To clip'].includes(Status)) return 'To Clip';
+		return QueueStatuses.includes(Status) ? Status : 'To Clip';
 	}
 
 	function MatchesSourceSearch(Account: PlatformAccount) {
@@ -258,6 +280,33 @@
 		ActiveView = 'Feed';
 		ActiveFeedFilter = Filter;
 		IsSidebarOpen = false;
+	}
+
+	function SelectFeedItem(Item: ContentItem) {
+		SelectedFeedItemId = Item.Id;
+	}
+
+	function IsQueued(Item: ContentItem) {
+		return Boolean(QueuedTaskForItem(Item));
+	}
+
+	function QueuedTaskForItem(Item: ContentItem) {
+		return QueueState.find((Task) => {
+			if (Item.SourceUrl && Task.SourceUrl) return Task.SourceUrl === Item.SourceUrl;
+			return Task.Creator === Item.Creator && Task.Source === Item.Title;
+		});
+	}
+
+	function HasThumbnail(Item: ContentItem) {
+		return Boolean(Item.ThumbnailUrl) && !FailedThumbnailIds.has(Item.Id);
+	}
+
+	function ThumbnailSrc(Item: ContentItem) {
+		return Item.ThumbnailUrl ?? '';
+	}
+
+	function MarkThumbnailFailed(Id: number) {
+		FailedThumbnailIds = new Set([...FailedThumbnailIds, Id]);
 	}
 
 	function ScoreClass(Score: number) {
@@ -891,10 +940,10 @@
 						<div class="LeadGrid">
 							{#each LeadItems as Item}
 								<div class="LeadCell">
-									<button class="LeadMain" onclick={() => (SelectedCreatorName = Item.Creator)}>
+									<button class:Selected={SelectedFeedItem?.Id === Item.Id} class="LeadMain" onclick={() => SelectFeedItem(Item)}>
 										<div class="LeadMedia">
-											{#if Item.ThumbnailUrl}
-												<img src={Item.ThumbnailUrl} alt="" loading="lazy" />
+											{#if HasThumbnail(Item)}
+												<img src={ThumbnailSrc(Item)} alt="" loading="lazy" onerror={() => MarkThumbnailFailed(Item.Id)} />
 											{:else}
 												<i class={`ti ${PlatformIcon(Item.Platform)}`}></i>
 											{/if}
@@ -931,12 +980,12 @@
 								<span>{ActiveFeedFilter}</span>
 							</div>
 							{#each FeedItems as Item, Index}
-								<div class="FeedRow">
-									<button class="FeedMain" onclick={() => (SelectedCreatorName = Item.Creator)}>
+								<div class:Selected={SelectedFeedItem?.Id === Item.Id} class="FeedRow">
+									<button class="FeedMain" onclick={() => SelectFeedItem(Item)}>
 										<span class="RowNum">{Index + 1}</span>
 										<span class="RowThumb">
-											{#if Item.ThumbnailUrl}
-												<img src={Item.ThumbnailUrl} alt="" loading="lazy" />
+											{#if HasThumbnail(Item)}
+												<img src={ThumbnailSrc(Item)} alt="" loading="lazy" onerror={() => MarkThumbnailFailed(Item.Id)} />
 											{:else}
 												<i class={`ti ${PlatformIcon(Item.Platform)}`}></i>
 											{/if}
@@ -946,7 +995,7 @@
 											<span class="RowTitle">{Item.Title}</span>
 											<span class="RowMeta">
 												{Item.Age} / {Item.Kind} / {Item.Metric}
-												<span class="Tag">{Item.Status}</span>
+												<span class={`StatusChip ${IsQueued(Item) ? 'Queued' : Item.Status}`}>{IsQueued(Item) ? 'Queued' : Item.Status}</span>
 												{#if LatestAction(Item.LastAction, Item.LastActionBy)}<span class="ActionTag">{LatestAction(Item.LastAction, Item.LastActionBy)}</span>{/if}
 												{#if Item.Campaign !== 'Organic'}<span class="Tag CampaignTag">{Item.Campaign}</span>{/if}
 											</span>
@@ -965,12 +1014,23 @@
 											</button>
 										{/each}
 									</div>
-									<form method="POST" action="?/AddContentToQueue" class="QueueSourceForm" use:enhance={FormFeedback('Queue item')}>
-										<input type="hidden" name="ContentId" value={Item.Id} />
-										<button aria-label={`Queue ${Item.Title}`}>
-											<i class="ti ti-list-plus"></i>
-										</button>
-									</form>
+									{#if QueuedTaskForItem(Item)}
+										<form method="POST" action="?/DeleteContentQueueItem" class="QueueSourceForm" use:enhance={FormFeedback('Queue item', 'removed')}>
+											<input type="hidden" name="ContentId" value={Item.Id} />
+											<button class="Danger" title="Remove from queue" aria-label={`Remove ${Item.Title} from queue`}>
+												<i class="ti ti-trash"></i>
+												<span>Remove</span>
+											</button>
+										</form>
+									{:else}
+										<form method="POST" action="?/AddContentToQueue" class="QueueSourceForm" use:enhance={FormFeedback('Queue item')}>
+											<input type="hidden" name="ContentId" value={Item.Id} />
+											<button title="Queue to clip" aria-label={`Queue ${Item.Title}`}>
+												<i class="ti ti-list-plus"></i>
+												<span>Queue</span>
+											</button>
+										</form>
+									{/if}
 								</div>
 							{:else}
 								<div class="EmptyState InlineEmpty">
@@ -982,13 +1042,60 @@
 					</div>
 
 					<aside class="RightPanel">
-						<div class="PanelSection">
+						<div class="SelectedSourceCard">
+							{#if SelectedFeedItem}
+								<div class="SelectedMedia">
+									{#if HasThumbnail(SelectedFeedItem)}
+										<img src={ThumbnailSrc(SelectedFeedItem)} alt="" loading="lazy" onerror={() => MarkThumbnailFailed(SelectedFeedItem.Id)} />
+									{:else}
+										<i class={`ti ${PlatformIcon(SelectedFeedItem.Platform)}`}></i>
+									{/if}
+								</div>
+								<div class="SelectedMeta">
+									<span><i class={`ti ${PlatformIcon(SelectedFeedItem.Platform)}`}></i>{SelectedFeedItem.Platform} / {SelectedFeedItem.Kind}</span>
+									<h2>{SelectedFeedItem.Title}</h2>
+									<p>{SelectedFeedItem.Creator} / {SelectedFeedItem.Metric} / {SelectedFeedItem.Age}</p>
+								</div>
+								<div class="SelectedActions">
+									{#if SelectedFeedItem.SourceUrl}
+										<a class="PrimaryButton" href={SelectedFeedItem.SourceUrl} target="_blank" rel="noreferrer">
+											<i class="ti ti-external-link"></i>Open source
+										</a>
+									{/if}
+									{#if QueuedTaskForItem(SelectedFeedItem)}
+										<form method="POST" action="?/DeleteContentQueueItem" use:enhance={FormFeedback('Queue item', 'removed')}>
+											<input type="hidden" name="ContentId" value={SelectedFeedItem.Id} />
+											<button class="PrimaryButton Danger">
+												<i class="ti ti-trash"></i>Remove from queue
+											</button>
+										</form>
+									{:else}
+										<form method="POST" action="?/AddContentToQueue" use:enhance={FormFeedback('Queue item')}>
+											<input type="hidden" name="ContentId" value={SelectedFeedItem.Id} />
+											<button class="PrimaryButton">
+												<i class="ti ti-list-plus"></i>Queue to clip
+											</button>
+										</form>
+									{/if}
+								</div>
+								<div class="SelectedFacts">
+									<div><span>Score</span><strong>{SelectedFeedItem.Score}</strong></div>
+									<div><span>Status</span><strong>{IsQueued(SelectedFeedItem) ? 'Queued' : SelectedFeedItem.Status}</strong></div>
+								</div>
+							{:else}
+								<div class="EmptyState MiniEmpty">
+									<i class="ti ti-inbox"></i>
+									<span>Sync sources to populate the feed.</span>
+								</div>
+							{/if}
+						</div>
+						<div class="PanelSection CompactStats">
 							<div class="PanelLabel">Workflow</div>
 							<div class="StatGrid">
-								<div><span>Clips made</span><strong>{ClippedCount}</strong></div>
-								<div><span>Uploads out</span><strong>{UploadedCount}</strong></div>
-								<div><span>Avg score</span><strong>{AverageScore}</strong></div>
-								<div><span>In queue</span><strong>{QueueState.length}</strong></div>
+								<div><span>Fresh</span><strong>{FreshCount}</strong></div>
+								<div><span>Queued</span><strong>{QueueState.length}</strong></div>
+								<div><span>Finished</span><strong>{FinishedCount}</strong></div>
+								<div><span>Uploaded</span><strong>{UploadedCount}</strong></div>
 							</div>
 						</div>
 						<div class="PanelSection">
@@ -1006,33 +1113,28 @@
 						</div>
 						<div class="PanelSection">
 							<div class="PanelLabel">
-								Clip queue
+								Active queue
 								<button onclick={() => (ActiveView = 'Queue')}>view all</button>
 							</div>
 							{#each QueueState.slice(0, 3) as Task}
 								<div class="QueueCard">
 									<div class="QueueCreator">{Task.Creator} / {Task.Platform}</div>
 									<div class="QueueTitle">{Task.Source}</div>
-									<div class="QueueTimestamp">{Task.Timestamp}</div>
-									<div class="TaskTargets">
-										{#each Object.entries(Task.Targets) as [Target, Done]}
-											<span class:Done>{Target}{Done ? ' ok' : ''}</span>
-										{/each}
-									</div>
+									<div class="QueueTimestamp">{NormalizeQueueStatus(Task.Status)} / {Task.LastActionBy ? `added by ${Task.LastActionBy}` : Task.Timestamp}</div>
 								</div>
 							{:else}
 								<div class="EmptyState MiniEmpty">
 									<i class="ti ti-inbox"></i>
-									<span>No clips queued.</span>
+									<span>No clips queued. Pick a feed item and press Queue to clip.</span>
 								</div>
 							{/each}
 						</div>
 						<div class="RevenueBlock">
-							<div class="PanelLabel">Campaign earnings</div>
-							<div class="Revenue">${Earnings}</div>
-							<div class="Muted">{Campaigns.length} active campaigns</div>
-							<div class="ScoreBar"><span style={`width:${EarningsGoal ? Math.min(100, (Earnings / EarningsGoal) * 100) : 0}%`}></span></div>
-							<div class="GoalLine"><span>${Earnings} earned</span><span>${EarningsGoal} goal</span></div>
+							<div class="PanelLabel">Source status</div>
+							<div class="Revenue">{SyncedSourceCount} synced</div>
+							<div class="Muted">{PlatformAccounts.length} tracked source accounts</div>
+							<div class="ScoreBar"><span style={`width:${ApiSourceCount ? (SyncedSourceCount / ApiSourceCount) * 100 : 0}%`}></span></div>
+							<div class="GoalLine"><span>{ManualSourceCount} manual-only</span><span>{ContentItems.length} feed items</span></div>
 						</div>
 					</aside>
 				</div>
@@ -1118,7 +1220,7 @@
 		{:else if ActiveView === 'Queue'}
 			<section class="View">
 				<div class="Subheader">
-					<span class="SubheaderTitle">Clip queue</span>
+					<span class="SubheaderTitle">Queue</span>
 					{#each QueueFilters as Filter}
 						<button
 							class:Active={ActiveQueueFilter === Filter}
@@ -1129,437 +1231,89 @@
 						</button>
 					{/each}
 					<div class="SubheaderSpacer"></div>
+					<button class="Chip" class:Active={ShowManualQueueForm} onclick={() => (ShowManualQueueForm = !ShowManualQueueForm)}>
+						<i class="ti ti-plus"></i>Manual
+					</button>
 				</div>
-				<form method="POST" action="?/AddClipTask" class="QuickForm QueueForm" use:enhance={FormFeedback('Clip')}>
-					<select name="Creator" required>
-						{#each Creators as Creator}<option>{Creator.Name}</option>{/each}
-					</select>
-					<select name="Platform">
-						<option>Kick</option><option>Twitch</option><option>YouTube</option><option>TikTok</option>
-					</select>
-					<input name="Source" placeholder="Source moment" required />
-					<input name="SourceUrl" placeholder="Source URL" />
-					<input name="Timestamp" placeholder="1:24:33" />
-					<input name="Hook" placeholder="Hook idea" />
-					<input name="Score" type="number" min="0" max="100" placeholder="Score" />
-					<label><input name="TikTok" type="checkbox" checked />TT</label>
-					<label><input name="Shorts" type="checkbox" />YT</label>
-					<label><input name="Reels" type="checkbox" />IG</label>
-					<input name="TikTokUrl" placeholder="TikTok URL" />
-					<input name="ShortsUrl" placeholder="Shorts URL" />
-					<input name="ReelsUrl" placeholder="Reels URL" />
-					<button class="PrimaryButton"><i class="ti ti-plus"></i>Add clip</button>
-				</form>
-				<form method="POST" action="?/AddExternalMediaJob" class="QuickForm ExternalDownloadForm" use:enhance={FormFeedback('External download')}>
-					<input name="SourceUrl" placeholder="Paste TikTok, Instagram, Kick, Twitch, YouTube, or other video link" required />
-					<input name="VideoTitle" placeholder="Optional title" />
-					<input name="Creator" placeholder="Optional creator/channel" />
-					<button class="PrimaryButton"><i class="ti ti-download"></i>Add external download</button>
-				</form>
-				<form method="POST" action="?/AddManualMediaJob" enctype="multipart/form-data" class="ManualSourceForm" use:enhance={FormFeedback('Manual source', 'imported')}>
-					<input type="hidden" name="Actor" value={ActorName} />
-					<div class="SectionHead"><span>manual source fallback</span><span>restricted links, uploads, or local files</span></div>
-					<input name="VideoTitle" placeholder="Title" required />
-					<input name="Creator" placeholder="Creator/channel" required />
-					<input name="SourceUrl" placeholder="Original source URL or manual note" />
-					<select name="Platform" aria-label="Manual source platform">
-						<option>Manual</option><option>TikTok</option><option>Instagram</option><option>Kick</option><option>Twitch</option><option>YouTube</option><option>Other</option>
-					</select>
-					<input name="Duration" placeholder="Duration, e.g. 12:34" />
-					<label><span>Video file</span><input name="VideoFile" type="file" accept="video/*" /></label>
-					<label><span>Audio file</span><input name="AudioFile" type="file" accept="audio/*" /></label>
-					<input name="VideoPath" placeholder="Or local video path for desktop worker" />
-					<input name="AudioPath" placeholder="Or local audio path" />
-					<input name="TranscriptLanguage" placeholder="Transcript language, e.g. en" />
-					<textarea name="TranscriptText" placeholder="Optional transcript. Timestamped lines are supported."></textarea>
-					<textarea name="ManualContext" placeholder="Context, login/restriction notes, campaign rules, source details, or anything the analysis should know."></textarea>
-					<button class="PrimaryButton"><i class="ti ti-upload"></i>Import manual source</button>
-				</form>
-				{#if ExternalMediaJobs.length}
-					<div class="ExternalJobPanel">
-						<div class="SectionHead"><span>external-link downloader</span><span>{ExternalMediaJobs.length} source review items</span></div>
-						<div class="MediaJobList">
-							{#each ExternalMediaJobs as Job}
-								<article class={`MediaJobCard ${StageClass(Job.Stage)}`}>
-									<div class="MediaJobMedia">
-										{#if Job.ThumbnailUrl}
-											<img src={Job.ThumbnailUrl} alt="" loading="lazy" />
-										{:else}
-											<i class={`ti ${PlatformIcon(Job.SourcePlatform as Platform) ?? 'ti-video'}`}></i>
-										{/if}
-									</div>
-									<div class="MediaJobBody">
-										<div class="MediaJobTop">
-											<span>{Job.SourcePlatform}</span>
-											<strong>{Job.VideoTitle}</strong>
-										</div>
-										<div class="MediaJobMeta">
-											<span>{Job.Creator}</span>
-											<span>{Job.Duration}</span>
-											<span>{Job.MediaStatus}</span>
-											<span>{Job.EstimatedFileSize}</span>
-											<span>Priority {Job.Priority}</span>
-										</div>
-										<div class="JobProgress">
-											<span style={`width:${Math.max(0, Math.min(100, Job.Progress))}%`}></span>
-										</div>
-										<div class="MediaJobStage">
-											<span>{Job.Stage}</span>
-											<span>{Job.Progress}%</span>
-											<span>{Job.ManualReviewStatus}</span>
-										</div>
-										{#if Job.OutputPath}<div class="OutputPath"><i class="ti ti-folder"></i>{Job.OutputPath}</div>{/if}
-										{#if Job.AudioPath}<div class="OutputPath"><i class="ti ti-volume"></i>{Job.AudioPath}</div>{/if}
-										{#if Job.SourceValidationStatus}<div class="SourceValidation"><i class="ti ti-shield-check"></i>{Job.SourceValidationStatus}</div>{/if}
-										{#if Job.ManualContext}<div class="ManualContext">{Job.ManualContext}</div>{/if}
-										{#if IsLiveCapableJob(Job)}
-											<form method="POST" action="?/ConfigureLivestreamJob" class="LiveControlForm" use:enhance={FormFeedback('Livestream')}>
-												<input type="hidden" name="Id" value={Job.Id} />
-												<label>
-													<span>Record</span>
-													<select name="LiveRecordingMode">
-														<option selected={Job.LiveRecordingMode === 'record entire livestream'}>record entire livestream</option>
-														<option selected={Job.LiveRecordingMode === 'begin from current moment'}>begin from current moment</option>
-														<option selected={Job.LiveRecordingMode === 'chunk analysis'}>chunk analysis</option>
-													</select>
-												</label>
-												<label><span>Chunk seconds</span><input name="LiveChunkSeconds" type="number" min="30" max="7200" value={Job.LiveChunkSeconds ?? 300} /></label>
-												<label class="CheckField"><input name="LiveAnalyzeWhileRecording" type="checkbox" checked={Boolean(Job.LiveAnalyzeWhileRecording)} /> Analyze while recording</label>
-												<label class="CheckField"><input name="LiveGeneratePeriodicClips" type="checkbox" checked={Boolean(Job.LiveGeneratePeriodicClips)} /> Generate clips periodically</label>
-												<button><i class="ti ti-broadcast"></i>Save live plan</button>
-											</form>
-											<form method="POST" action="?/MarkLivestreamMoment" class="LiveMarkForm" use:enhance={FormFeedback('Live moment', 'marked')}>
-												<input type="hidden" name="Id" value={Job.Id} />
-												<input name="MomentTimestamp" placeholder="Timestamp or live" value="live" />
-												<input name="MomentLabel" placeholder="Moment note, e.g. insane reaction" />
-												<button><i class="ti ti-bookmark-plus"></i>Mark moment</button>
-											</form>
-											{#if LiveMoments(Job).length}
-												<div class="LiveMomentList">
-													{#each LiveMoments(Job) as Moment}
-														<span>{Moment.Timestamp} / {Moment.Label} / {Moment.Actor}</span>
-													{/each}
-												</div>
-											{/if}
-										{/if}
-										{#if Job.TranscriptText}
-											<div class="TranscriptInfo">
-												<span>{Job.TranscriptSource ?? 'transcript'}</span>
-												<span>{Job.TranscriptModel ?? 'auto model'}</span>
-												<span>{Job.TranscriptLanguage ?? 'unknown language'}</span>
-												{#if Job.TranscriptConfidence}<span>{Math.round(Job.TranscriptConfidence * 100)}% confidence</span>{/if}
-											</div>
-											{#if Job.TranscriptTranslationText}
-												<div class="TranscriptInfo">
-													<span>{Job.TranscriptTranslationLanguage ?? 'translated'}</span>
-													<span>{Job.TranscriptTranslationSource ?? 'translation'}</span>
-												</div>
-											{/if}
-											<div class="TranscriptExports">
-												<a href={`/api/media-jobs/${Job.Id}/transcript/txt`}><i class="ti ti-file-text"></i>TXT</a>
-												<a href={`/api/media-jobs/${Job.Id}/transcript/srt`}><i class="ti ti-captions"></i>SRT</a>
-												<a href={`/api/media-jobs/${Job.Id}/transcript/vtt`}><i class="ti ti-captions-filled"></i>VTT</a>
-												<a href={`/api/media-jobs/${Job.Id}/transcript/json`}><i class="ti ti-braces"></i>JSON</a>
-											</div>
-											<pre class="TranscriptPreview">{Job.TranscriptText}</pre>
-										{/if}
-										{#if Job.ErrorMessage}<div class="JobError">{Job.ErrorMessage}</div>{/if}
-									</div>
-									<div class="MediaJobActions">
-										{#if Job.ManualReviewStatus === 'Needs source review'}
-											<form method="POST" action="?/ApproveMediaJobSource" use:enhance={FormFeedback('Source review')}>
-												<input type="hidden" name="Id" value={Job.Id} />
-												<button>Approve</button>
-											</form>
-										{/if}
-										<form method="POST" action="?/ValidateMediaJobSource" use:enhance={FormFeedback('Source validation', 'queued')}>
-											<input type="hidden" name="Id" value={Job.Id} />
-											<button><i class="ti ti-shield-search"></i>Validate</button>
-										</form>
-										<form method="POST" action="?/UpdateMediaJobPriority" use:enhance={FormFeedback('Priority')}>
-											<input type="hidden" name="Id" value={Job.Id} />
-											<input type="hidden" name="Delta" value="1" />
-											<button><i class="ti ti-arrow-up"></i>Priority</button>
-										</form>
-										<form method="POST" action="?/UpdateMediaJobPriority" use:enhance={FormFeedback('Priority')}>
-											<input type="hidden" name="Id" value={Job.Id} />
-											<input type="hidden" name="Delta" value="-1" />
-											<button><i class="ti ti-arrow-down"></i>Priority</button>
-										</form>
-										<form method="POST" action="?/PauseMediaJob" use:enhance={FormFeedback('Media job')}>
-											<input type="hidden" name="Id" value={Job.Id} />
-											<button><i class="ti ti-player-pause"></i>Pause</button>
-										</form>
-										<form method="POST" action="?/ResumeMediaJob" use:enhance={FormFeedback('Media job')}>
-											<input type="hidden" name="Id" value={Job.Id} />
-											<button><i class="ti ti-player-play"></i>Resume</button>
-										</form>
-										<form method="POST" action="?/RetryMediaJob" use:enhance={FormFeedback('Media job')}>
-											<input type="hidden" name="Id" value={Job.Id} />
-											<button><i class="ti ti-refresh"></i>Retry</button>
-										</form>
-										<form method="POST" action="?/RetryTranscript" use:enhance={FormFeedback('Transcript')}>
-											<input type="hidden" name="Id" value={Job.Id} />
-											<input type="hidden" name="TranscriptModel" value="auto" />
-											<button><i class="ti ti-captions"></i>Transcript</button>
-										</form>
-										<form method="POST" action="?/CancelMediaJob" use:enhance={FormFeedback('Media job')}>
-											<input type="hidden" name="Id" value={Job.Id} />
-											<button><i class="ti ti-x"></i>Cancel</button>
-										</form>
-									</div>
-								</article>
-							{/each}
-						</div>
-					</div>
+				{#if ShowManualQueueForm}
+					<form method="POST" action="?/AddClipTask" class="QuickForm QueueForm" use:enhance={FormFeedback('Clip')}>
+						<select name="Creator" required>
+							{#each QueueCreatorOptions as Creator}<option>{Creator}</option>{/each}
+						</select>
+						<select name="Platform">
+							<option>Kick</option><option>Twitch</option><option>YouTube</option><option>TikTok</option>
+						</select>
+						<input name="Source" placeholder="Source moment" required />
+						<input name="SourceUrl" placeholder="Source URL" />
+						<input name="Timestamp" placeholder="Timestamp or note" />
+						<input name="Hook" placeholder="Hook idea" />
+						<input name="Score" type="number" min="0" max="100" placeholder="Score" />
+						<button class="PrimaryButton"><i class="ti ti-plus"></i>Add clip</button>
+					</form>
 				{/if}
-				<div class="TableWrap">
-					<table>
-						<thead>
-							<tr>
-								<th>#</th>
-								<th>Source</th>
-								<th>Timestamp</th>
-								<th>Hook idea</th>
-								<th>Platforms</th>
-								<th>Score</th>
-								<th>Status</th>
-								<th></th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each QueueItems as Task}
-								<tr>
-									<td>{Task.Id}</td>
-									<td>
-										<div class="QueueCreator">{Task.Creator} / {Task.Platform}</div>
-										<div>{Task.Source}</div>
-										{#if Task.SourceUrl}
-											<a class="QueueSourceLink" href={Task.SourceUrl} target="_blank" rel="noreferrer">open source</a>
-										{/if}
-										{#if LatestAction(Task.LastAction, Task.LastActionBy)}
-											<div class="ActionLine">{LatestAction(Task.LastAction, Task.LastActionBy)}</div>
-										{/if}
-									</td>
-									<td class="QueueTimestamp">{Task.Timestamp}</td>
-									<td class="Hook">"{Task.Hook}"</td>
-									<td>
-										<div class="TaskTargets">
-											{#each Object.entries(Task.Targets) as [Target, Done]}
-												{#if UploadUrl(Task, Target)}
-													<a href={UploadUrl(Task, Target)} target="_blank" rel="noreferrer">{Target}</a>
-												{:else}
-													<span class:Done>{Target}</span>
-												{/if}
-											{/each}
-										</div>
-									</td>
-									<td><span class={`RowScore ${ScoreClass(Task.Score)}`}>{Task.Score}</span></td>
-									<td>
-										<select value={Task.Status} onchange={(Event) => UpdateTaskStatus(Task, Event.currentTarget.value)}>
-											{#each QueueFilters.filter((Filter) => Filter !== 'All') as Status}
-												<option>{Status}</option>
-											{/each}
-											<option>Uploading</option>
-											<option>Watched</option>
-											<option>To clip</option>
-										</select>
-									</td>
-									<td>
-										<div class="RowActions">
-											<form method="POST" action="?/PrepareClipDownload" use:enhance={FormFeedback('Download job')}>
-												<input type="hidden" name="ClipTaskId" value={Task.Id} />
-												<button disabled={!Task.SourceUrl} aria-label={`Prepare download for ${Task.Source}`}>
-													<i class="ti ti-download"></i>
-												</button>
-											</form>
-											<button aria-label={`Edit clip task ${Task.Id}`} onclick={() => (EditingTaskId = EditingTaskId === Task.Id ? null : Task.Id)}>
-												<i class="ti ti-edit"></i>
-											</button>
-											<form method="POST" action="?/DeleteClipTask" class="InlineDelete TableDelete" use:enhance={FormFeedback('Clip')}>
-												<input type="hidden" name="Id" value={Task.Id} />
-												<button aria-label={`Delete clip task ${Task.Id}`}><i class="ti ti-trash"></i></button>
-											</form>
-										</div>
-									</td>
-								</tr>
-								{#if JobsForTask(Task).length}
-									<tr class="MediaJobRow">
-										<td></td>
-										<td colspan="7">
-											<div class="MediaJobList">
-												{#each JobsForTask(Task) as Job}
-													<article class={`MediaJobCard ${StageClass(Job.Stage)}`}>
-														<div class="MediaJobMedia">
-															{#if Job.ThumbnailUrl}
-																<img src={Job.ThumbnailUrl} alt="" loading="lazy" />
-															{:else}
-																<i class={`ti ${PlatformIcon(Job.SourcePlatform as Platform) ?? 'ti-video'}`}></i>
-															{/if}
-														</div>
-														<div class="MediaJobBody">
-															<div class="MediaJobTop">
-																<span>{Job.SourcePlatform}</span>
-																<strong>{Job.VideoTitle}</strong>
-															</div>
-															<div class="MediaJobMeta">
-																<span>{Job.Creator}</span>
-																<span>{Job.Duration}</span>
-																<span>{Job.MediaStatus}</span>
-																<span>{Job.EstimatedFileSize}</span>
-																<span>Priority {Job.Priority}</span>
-															</div>
-															<div class="JobProgress">
-																<span style={`width:${Math.max(0, Math.min(100, Job.Progress))}%`}></span>
-															</div>
-															<div class="MediaJobStage">
-																<span>{Job.Stage}</span>
-																<span>{Job.Progress}%</span>
-																<span>{Job.ManualReviewStatus}</span>
-															</div>
-															{#if Job.OutputPath}<div class="OutputPath"><i class="ti ti-folder"></i>{Job.OutputPath}</div>{/if}
-															{#if Job.AudioPath}<div class="OutputPath"><i class="ti ti-volume"></i>{Job.AudioPath}</div>{/if}
-															{#if Job.SourceValidationStatus}<div class="SourceValidation"><i class="ti ti-shield-check"></i>{Job.SourceValidationStatus}</div>{/if}
-															{#if Job.ManualContext}<div class="ManualContext">{Job.ManualContext}</div>{/if}
-															{#if IsLiveCapableJob(Job)}
-																<form method="POST" action="?/ConfigureLivestreamJob" class="LiveControlForm" use:enhance={FormFeedback('Livestream')}>
-																	<input type="hidden" name="Id" value={Job.Id} />
-																	<label>
-																		<span>Record</span>
-																		<select name="LiveRecordingMode">
-																			<option selected={Job.LiveRecordingMode === 'record entire livestream'}>record entire livestream</option>
-																			<option selected={Job.LiveRecordingMode === 'begin from current moment'}>begin from current moment</option>
-																			<option selected={Job.LiveRecordingMode === 'chunk analysis'}>chunk analysis</option>
-																		</select>
-																	</label>
-																	<label><span>Chunk seconds</span><input name="LiveChunkSeconds" type="number" min="30" max="7200" value={Job.LiveChunkSeconds ?? 300} /></label>
-																	<label class="CheckField"><input name="LiveAnalyzeWhileRecording" type="checkbox" checked={Boolean(Job.LiveAnalyzeWhileRecording)} /> Analyze while recording</label>
-																	<label class="CheckField"><input name="LiveGeneratePeriodicClips" type="checkbox" checked={Boolean(Job.LiveGeneratePeriodicClips)} /> Generate clips periodically</label>
-																	<button><i class="ti ti-broadcast"></i>Save live plan</button>
-																</form>
-																<form method="POST" action="?/MarkLivestreamMoment" class="LiveMarkForm" use:enhance={FormFeedback('Live moment', 'marked')}>
-																	<input type="hidden" name="Id" value={Job.Id} />
-																	<input name="MomentTimestamp" placeholder="Timestamp or live" value="live" />
-																	<input name="MomentLabel" placeholder="Moment note, e.g. insane reaction" />
-																	<button><i class="ti ti-bookmark-plus"></i>Mark moment</button>
-																</form>
-																{#if LiveMoments(Job).length}
-																	<div class="LiveMomentList">
-																		{#each LiveMoments(Job) as Moment}
-																			<span>{Moment.Timestamp} / {Moment.Label} / {Moment.Actor}</span>
-																		{/each}
-																	</div>
-																{/if}
-															{/if}
-															{#if Job.ErrorMessage}<div class="JobError">{Job.ErrorMessage}</div>{/if}
-															{#if Job.TranscriptText}
-																<div class="TranscriptInfo">
-																	<span>{Job.TranscriptSource ?? 'transcript'}</span>
-																	<span>{Job.TranscriptModel ?? 'auto model'}</span>
-																	<span>{Job.TranscriptLanguage ?? 'unknown language'}</span>
-																	{#if Job.TranscriptConfidence}<span>{Math.round(Job.TranscriptConfidence * 100)}% confidence</span>{/if}
-																</div>
-																{#if Job.TranscriptTranslationText}
-																	<div class="TranscriptInfo">
-																		<span>{Job.TranscriptTranslationLanguage ?? 'translated'}</span>
-																		<span>{Job.TranscriptTranslationSource ?? 'translation'}</span>
-																	</div>
-																{/if}
-																<div class="TranscriptExports">
-																	<a href={`/api/media-jobs/${Job.Id}/transcript/txt`}><i class="ti ti-file-text"></i>TXT</a>
-																	<a href={`/api/media-jobs/${Job.Id}/transcript/srt`}><i class="ti ti-captions"></i>SRT</a>
-																	<a href={`/api/media-jobs/${Job.Id}/transcript/vtt`}><i class="ti ti-captions-filled"></i>VTT</a>
-																	<a href={`/api/media-jobs/${Job.Id}/transcript/json`}><i class="ti ti-braces"></i>JSON</a>
-																</div>
-																<pre class="TranscriptPreview">{Job.TranscriptText}</pre>
-															{/if}
-														</div>
-														<div class="MediaJobActions">
-															{#if Job.ManualReviewStatus === 'Needs source review'}
-																<form method="POST" action="?/ApproveMediaJobSource" use:enhance={FormFeedback('Source review')}>
-																	<input type="hidden" name="Id" value={Job.Id} />
-																	<button>Approve</button>
-																</form>
-															{/if}
-															<form method="POST" action="?/ValidateMediaJobSource" use:enhance={FormFeedback('Source validation', 'queued')}>
-																<input type="hidden" name="Id" value={Job.Id} />
-																<button><i class="ti ti-shield-search"></i>Validate</button>
-															</form>
-															<form method="POST" action="?/UpdateMediaJobPriority" use:enhance={FormFeedback('Priority')}>
-																<input type="hidden" name="Id" value={Job.Id} />
-																<input type="hidden" name="Delta" value="1" />
-																<button><i class="ti ti-arrow-up"></i>Priority</button>
-															</form>
-															<form method="POST" action="?/UpdateMediaJobPriority" use:enhance={FormFeedback('Priority')}>
-																<input type="hidden" name="Id" value={Job.Id} />
-																<input type="hidden" name="Delta" value="-1" />
-																<button><i class="ti ti-arrow-down"></i>Priority</button>
-															</form>
-															<form method="POST" action="?/PauseMediaJob" use:enhance={FormFeedback('Media job')}>
-																<input type="hidden" name="Id" value={Job.Id} />
-																<button><i class="ti ti-player-pause"></i>Pause</button>
-															</form>
-															<form method="POST" action="?/ResumeMediaJob" use:enhance={FormFeedback('Media job')}>
-																<input type="hidden" name="Id" value={Job.Id} />
-																<button><i class="ti ti-player-play"></i>Resume</button>
-															</form>
-															<form method="POST" action="?/RetryMediaJob" use:enhance={FormFeedback('Media job')}>
-																<input type="hidden" name="Id" value={Job.Id} />
-																<button><i class="ti ti-refresh"></i>Retry</button>
-															</form>
-															<form method="POST" action="?/RetryTranscript" use:enhance={FormFeedback('Transcript')}>
-																<input type="hidden" name="Id" value={Job.Id} />
-																<input type="hidden" name="TranscriptModel" value="auto" />
-																<button><i class="ti ti-captions"></i>Transcript</button>
-															</form>
-															<form method="POST" action="?/CancelMediaJob" use:enhance={FormFeedback('Media job')}>
-																<input type="hidden" name="Id" value={Job.Id} />
-																<button><i class="ti ti-x"></i>Cancel</button>
-															</form>
-														</div>
-													</article>
-												{/each}
-											</div>
-										</td>
-									</tr>
+				<div class="QueueBoard">
+					{#each QueueItems as Task}
+						<article class="QueueWorkCard">
+							<div class="QueueWorkTop">
+								<div>
+									<div class="QueueCreator"><i class={`ti ${PlatformIcon(Task.Platform)}`}></i>{Task.Platform} / {Task.Creator}</div>
+									<h2>{Task.Source}</h2>
+								</div>
+								<span class={`QueueStatusPill ${NormalizeQueueStatus(Task.Status).replace(' ', '')}`}>{NormalizeQueueStatus(Task.Status)}</span>
+							</div>
+							<div class="QueueWorkMeta">
+								<span><i class="ti ti-clock"></i>{Task.Timestamp}</span>
+								<span><i class="ti ti-flame"></i>{Task.Score}</span>
+								<span><i class="ti ti-user"></i>{Task.LastActionBy ? `Added by ${Task.LastActionBy}` : 'Unassigned'}</span>
+							</div>
+							<p class="Hook">"{Task.Hook}"</p>
+							<div class="QueueWorkActions">
+								{#if Task.SourceUrl}
+									<a class="QueueSourceLink" href={Task.SourceUrl} target="_blank" rel="noreferrer">
+										<i class="ti ti-external-link"></i>Open source
+									</a>
 								{/if}
-								{#if EditingTaskId === Task.Id}
-									<tr class="EditRow">
-										<td></td>
-										<td colspan="7">
-											<form method="POST" action="?/UpdateClipTask" class="InlineEditForm" use:enhance={FormFeedback('Clip')}>
-											<input type="hidden" name="Id" value={Task.Id} />
-											<input name="Source" value={Task.Source} aria-label="Source" />
-											<input name="SourceUrl" value={Task.SourceUrl ?? ''} aria-label="Source URL" />
-											<input name="Timestamp" value={Task.Timestamp} aria-label="Timestamp" />
-											<input name="Hook" value={Task.Hook} aria-label="Hook" />
-											<input name="Score" type="number" min="0" max="100" value={Task.Score} aria-label="Score" />
-											<select name="Status" value={Task.Status} aria-label="Status">
-												<option>To upload</option><option>Editing</option><option>Done</option><option>Uploading</option><option>Watched</option><option>To clip</option>
-											</select>
-											<label><input name="TikTok" type="checkbox" checked={Task.Targets.TikTok} />TT</label>
-											<label><input name="Shorts" type="checkbox" checked={Task.Targets.Shorts} />YT</label>
-											<label><input name="Reels" type="checkbox" checked={Task.Targets.Reels} />IG</label>
-											<input name="TikTokUrl" value={Task.UploadUrls.TikTok} aria-label="TikTok upload URL" />
-											<input name="ShortsUrl" value={Task.UploadUrls.Shorts} aria-label="Shorts upload URL" />
-											<input name="ReelsUrl" value={Task.UploadUrls.Reels} aria-label="Reels upload URL" />
-											<button class="PrimaryButton"><i class="ti ti-device-floppy"></i>Save</button>
-											</form>
-										</td>
-									</tr>
-								{/if}
-							{:else}
-								<tr>
-									<td colspan="8">
-										<div class="EmptyState InlineEmpty">
-											<i class="ti ti-inbox"></i>
-											<span>No queue items match this filter.</span>
-										</div>
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
+								<select class={`StatusSelect ${NormalizeQueueStatus(Task.Status).replace(' ', '')}`} value={NormalizeQueueStatus(Task.Status)} onchange={(Event) => UpdateTaskStatus(Task, Event.currentTarget.value)}>
+									{#each QueueStatuses as Status}<option>{Status}</option>{/each}
+								</select>
+								<form method="POST" action="?/PrepareClipDownload" use:enhance={FormFeedback('Download job')}>
+									<input type="hidden" name="ClipTaskId" value={Task.Id} />
+									<button class="IconButton" disabled={!Task.SourceUrl} aria-label={`Prepare download for ${Task.Source}`}>
+										<i class="ti ti-download"></i>
+									</button>
+								</form>
+								<button class="IconButton" aria-label={`Edit clip task ${Task.Id}`} onclick={() => (EditingTaskId = EditingTaskId === Task.Id ? null : Task.Id)}>
+									<i class="ti ti-edit"></i>
+								</button>
+								<form method="POST" action="?/DeleteClipTask" class="InlineDelete TableDelete" use:enhance={FormFeedback('Clip', 'removed')}>
+									<input type="hidden" name="Id" value={Task.Id} />
+									<button class="IconButton Danger" aria-label={`Delete clip task ${Task.Id}`}><i class="ti ti-trash"></i></button>
+								</form>
+							</div>
+							{#if LatestAction(Task.LastAction, Task.LastActionBy)}
+								<div class="ActionLine">{LatestAction(Task.LastAction, Task.LastActionBy)}</div>
+							{/if}
+							{#if EditingTaskId === Task.Id}
+								<form method="POST" action="?/UpdateClipTask" class="InlineEditForm" use:enhance={FormFeedback('Clip')}>
+									<input type="hidden" name="Id" value={Task.Id} />
+									<input name="Source" value={Task.Source} aria-label="Source" />
+									<input name="SourceUrl" value={Task.SourceUrl ?? ''} aria-label="Source URL" />
+									<input name="Timestamp" value={Task.Timestamp} aria-label="Timestamp" />
+									<input name="Hook" value={Task.Hook} aria-label="Hook" />
+									<input name="Score" type="number" min="0" max="100" value={Task.Score} aria-label="Score" />
+									<select name="Status" value={NormalizeQueueStatus(Task.Status)} aria-label="Status">
+										{#each QueueStatuses as Status}<option>{Status}</option>{/each}
+									</select>
+									<button class="PrimaryButton"><i class="ti ti-device-floppy"></i>Save</button>
+								</form>
+							{/if}
+						</article>
+					{:else}
+						<div class="EmptyState InlineEmpty">
+							<i class="ti ti-inbox"></i>
+							<span>No clips queued here. Go to Feed, pick a source, then press Queue to clip.</span>
+						</div>
+					{/each}
 				</div>
 			</section>
 		{:else if ActiveView === 'Best Clips'}
@@ -2916,6 +2670,30 @@
 		border-color: var(--Ink3);
 	}
 
+	.LeadMain.Selected,
+	.FeedRow.Selected {
+		background: var(--Page);
+	}
+
+	.FeedRow {
+		position: relative;
+	}
+
+	.FeedRow::before {
+		background: var(--Green);
+		content: '';
+		inset: 0 auto 0 0;
+		opacity: 0;
+		position: absolute;
+		transition: opacity 180ms ease, width 180ms ease;
+		width: 0;
+	}
+
+	.FeedRow.Selected::before {
+		opacity: 1;
+		width: 3px;
+	}
+
 	.Eyebrow,
 	.RowCreator,
 	.QueueCreator {
@@ -2981,7 +2759,8 @@
 
 	.FeedList,
 	.PanelSection,
-	.RevenueBlock {
+	.RevenueBlock,
+	.SelectedSourceCard {
 		background: var(--Surface);
 		border: 1px solid var(--Rule);
 		border-radius: 8px;
@@ -3097,13 +2876,28 @@
 		border: 0;
 		border-left: 1px solid var(--RuleSoft);
 		color: var(--Ink3);
+		display: inline-flex;
+		gap: 6px;
 		min-width: 42px;
+		place-items: center;
+		align-items: center;
+		justify-content: center;
+		padding: 0 10px;
+	}
+
+	.QueueSourceForm button.Danger {
+		color: #a44835;
 	}
 
 	.SourceLink:hover,
 	.QueueSourceForm button:hover {
 		background: var(--Page);
 		color: var(--Ink);
+	}
+
+	.QueueSourceForm button.Danger:hover {
+		background: #f7e9e2;
+		color: #7f2f21;
 	}
 
 	.QueueSourceLink {
@@ -3319,6 +3113,80 @@
 		padding: 18px;
 	}
 
+	.SelectedSourceCard {
+		margin-bottom: 14px;
+		padding: 15px;
+	}
+
+	.SelectedMedia {
+		align-items: center;
+		aspect-ratio: 16 / 9;
+		background: var(--RuleSoft);
+		border-radius: 7px;
+		color: var(--Ink3);
+		display: flex;
+		font-size: 34px;
+		justify-content: center;
+		margin-bottom: 14px;
+		overflow: hidden;
+	}
+
+	.SelectedMedia img {
+		height: 100%;
+		object-fit: cover;
+		width: 100%;
+	}
+
+	.SelectedMeta span {
+		color: var(--Ink3);
+		font-size: 10px;
+		text-transform: uppercase;
+	}
+
+	.SelectedMeta h2 {
+		font-family: 'Fraunces', serif;
+		font-size: 22px;
+		font-weight: 400;
+		line-height: 1.1;
+		margin: 5px 0;
+	}
+
+	.SelectedActions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		margin-top: 12px;
+	}
+
+	.SelectedActions form {
+		display: contents;
+	}
+
+	.SelectedFacts {
+		display: grid;
+		gap: 8px;
+		grid-template-columns: repeat(2, 1fr);
+		margin-top: 14px;
+	}
+
+	.SelectedFacts div {
+		border-top: 1px solid var(--RuleSoft);
+		padding-top: 9px;
+	}
+
+	.SelectedFacts span {
+		color: var(--Ink3);
+		display: block;
+		font-size: 10px;
+		text-transform: uppercase;
+	}
+
+	.SelectedFacts strong {
+		font-family: 'Fraunces', serif;
+		font-size: 22px;
+		font-weight: 400;
+	}
+
 	.PanelSection,
 	.RevenueBlock {
 		margin-bottom: 14px;
@@ -3426,6 +3294,131 @@
 		padding: 2px 6px;
 		text-decoration: none;
 		text-transform: uppercase;
+	}
+
+	.QueueBoard {
+		display: grid;
+		gap: 10px;
+		grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+		overflow-y: auto;
+		padding: 14px;
+	}
+
+	.QueueWorkCard {
+		background: var(--Page);
+		border: 1px solid var(--Rule);
+		border-radius: 8px;
+		display: grid;
+		gap: 12px;
+		padding: 14px;
+		transition:
+			border-color 180ms ease,
+			box-shadow 180ms ease,
+			transform 180ms ease;
+	}
+
+	.QueueWorkCard:hover {
+		border-color: var(--Ink3);
+		box-shadow: 0 10px 28px rgba(26, 25, 22, 0.08);
+		transform: translateY(-2px);
+	}
+
+	.QueueWorkTop,
+	.QueueWorkActions,
+	.QueueWorkMeta {
+		align-items: center;
+		display: flex;
+		gap: 8px;
+	}
+
+	.QueueWorkTop {
+		align-items: flex-start;
+		justify-content: space-between;
+	}
+
+	.QueueWorkTop h2 {
+		font-size: 15px;
+		font-weight: 600;
+		line-height: 1.25;
+		margin-top: 4px;
+	}
+
+	.QueueWorkMeta {
+		color: var(--Ink3);
+		flex-wrap: wrap;
+		font-size: 11px;
+	}
+
+	.QueueWorkMeta span {
+		align-items: center;
+		display: inline-flex;
+		gap: 4px;
+	}
+
+	.QueueWorkActions {
+		flex-wrap: wrap;
+	}
+
+	.QueueWorkActions .StatusSelect {
+		margin-left: auto;
+	}
+
+	.QueueStatusPill {
+		border-radius: 999px;
+		font-size: 10px;
+		font-weight: 700;
+		padding: 4px 8px;
+	}
+
+	.QueueStatusPill.ToClip,
+	.StatusSelect.ToClip {
+		background: var(--AmberSoft);
+		color: var(--Amber);
+	}
+
+	.QueueStatusPill.Finished,
+	.StatusSelect.Finished {
+		background: var(--BlueSoft);
+		color: var(--Blue);
+	}
+
+	.QueueStatusPill.Uploaded,
+	.StatusSelect.Uploaded {
+		background: var(--GreenSoft);
+		color: var(--Green);
+	}
+
+	.IconButton {
+		align-items: center;
+		background: var(--Surface);
+		border: 1px solid var(--Rule);
+		border-radius: 6px;
+		color: var(--Ink3);
+		display: inline-flex;
+		height: 30px;
+		justify-content: center;
+		width: 34px;
+	}
+
+	.IconButton:hover {
+		border-color: var(--Ink3);
+		color: var(--Green);
+		transform: translateY(-1px);
+	}
+
+	.IconButton.Danger:hover {
+		color: #8c2a1e;
+	}
+
+	.IconButton:disabled {
+		cursor: default;
+		opacity: 0.45;
+		transform: none;
+	}
+
+	.StatusSelect {
+		border-color: transparent;
+		font-weight: 600;
 	}
 
 	.CreatorHeader {
