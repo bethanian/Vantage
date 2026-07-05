@@ -29,6 +29,7 @@
 	const ClipTasks = $derived(data.ClipTasks);
 	const ContentItems = $derived(data.ContentItems);
 	const Creators = $derived(data.Creators);
+	const IsLocalDatabase = $derived(data.DatabaseMode === 'SQLite');
 	const MediaJobs = $derived(data.MediaJobs as MediaJob[]);
 	const PlatformAccounts = $derived(data.PlatformAccounts);
 	const SavedSearches = $derived(data.SavedSearches);
@@ -2225,13 +2226,15 @@
 							<i class="ti ti-search"></i>
 							<input bind:value={SourceSearch} placeholder="Find source account" aria-label="Find source account" />
 						</label>
-						<a class="PrimaryButton" href="/api/backup/db" download><i class="ti ti-download"></i>Backup DB</a>
-						<form method="POST" action="?/ImportDatabaseBackup" enctype="multipart/form-data" class="ImportBackupForm" use:enhance={FormFeedback('Database import')}>
-							<label class="PrimaryButton">
-								<i class="ti ti-upload"></i>Import DB
-								<input name="Backup" type="file" accept=".db,.sqlite,.sqlite3,application/vnd.sqlite3" onchange={(Event) => Event.currentTarget.form?.requestSubmit()} />
-							</label>
-						</form>
+						{#if IsLocalDatabase}
+							<a class="PrimaryButton" href="/api/backup/db" download><i class="ti ti-download"></i>Backup DB</a>
+							<form method="POST" action="?/ImportDatabaseBackup" enctype="multipart/form-data" class="ImportBackupForm" use:enhance={FormFeedback('Database import')}>
+								<label class="PrimaryButton">
+									<i class="ti ti-upload"></i>Import DB
+									<input name="Backup" type="file" accept=".db,.sqlite,.sqlite3,application/vnd.sqlite3" onchange={(Event) => Event.currentTarget.form?.requestSubmit()} />
+								</label>
+							</form>
+						{/if}
 						<button class="PrimaryButton" disabled={IsResolvingSources} onclick={ResolveSources}>
 							<i class="ti ti-id"></i>{IsResolvingSources ? 'Resolving IDs' : 'Resolve source IDs'}
 						</button>
@@ -2240,7 +2243,7 @@
 				<div class="ApiKeyPanel">
 					<div>
 						<h2>API keys</h2>
-						<p>Keys are stored locally in SQLite. Environment variables still override saved values.</p>
+						<p>Keys are stored in the active app database. Environment variables still override saved values.</p>
 					</div>
 					<form method="POST" action="?/SaveApiCredentials" class="ApiKeyForm" use:enhance={FormFeedback('API keys')}>
 						{#each ApiCredentials as Credential}

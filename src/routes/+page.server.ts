@@ -151,7 +151,7 @@ export async function load() {
 		 from worker_heartbeats order by last_seen_at desc limit 12`
 	);
 
-	return { ActivityEvents, ApiCredentials, AppSettings, Campaigns, ClipCandidates, ClipExports, ClipPreviews, ClipTasks, ContentItems, Creators, MediaJobs, PlatformAccounts, SavedSearches, SyncRuns, WorkerHeartbeats };
+	return { ActivityEvents, ApiCredentials, AppSettings, Campaigns, ClipCandidates, ClipExports, ClipPreviews, ClipTasks, ContentItems, Creators, DatabaseMode: IsPostgresRuntime ? 'Postgres' : 'SQLite', MediaJobs, PlatformAccounts, SavedSearches, SyncRuns, WorkerHeartbeats };
 }
 
 export const actions: Actions = {
