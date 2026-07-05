@@ -35,6 +35,7 @@ KICK_CLIENT_ID=...
 KICK_CLIENT_SECRET=...
 GEMINI_API_KEYS=key1,key2,key3
 VANTAGE_WORKER_ROLE=local-primary
+VANTAGE_DASHBOARD_URL=https://your-vantage-app.vercel.app
 VANTAGE_DOWNLOAD_DIR=D:\Vantage\downloads
 VANTAGE_TRANSCRIPT_DIR=D:\Vantage\transcripts
 VANTAGE_MEDIA_SIGNAL_DIR=D:\Vantage\signals
@@ -45,10 +46,16 @@ VANTAGE_EXPORT_DIR=D:\Vantage\exports
 Or let the setup helper create it:
 
 ```powershell
-npm.cmd run workers:local:configure
+npm.cmd run workers:local:setup
 ```
 
-The helper prompts for your hosted Postgres URL and API keys, writes `.env.local`, creates local media folders, and warns if `ffmpeg` or `yt-dlp` is missing from `PATH`.
+The helper prompts for your hosted Postgres URL and API keys, writes `.env.local`, creates local media folders, checks readiness, and warns if `ffmpeg` or `yt-dlp` is missing from `PATH`.
+
+To install the local worker on login and start the tray in one pass:
+
+```powershell
+npm.cmd run workers:local:setup -- -InstallOnLogin -StartTray
+```
 
 Check local worker readiness without exposing secrets:
 
@@ -60,6 +67,12 @@ Start the full local worker stack:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/start-local-workers.ps1
+```
+
+Start the tray controller with the moon icon:
+
+```powershell
+npm.cmd run workers:local:tray
 ```
 
 Start it with automatic restart if the worker exits:

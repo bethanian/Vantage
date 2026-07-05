@@ -1,4 +1,5 @@
-import { All, EnsureAppDatabaseReady, Get, NextId, Run } from '../src/lib/server/db/app-db';
+import { EnsureAppDatabaseReady, Get, NextId, Run } from '../src/lib/server/db/app-db';
+import { ClaimNext } from './worker-claim';
 
 type MediaJobRow = {
 	Id: number;
@@ -49,18 +50,19 @@ async function RunWorker() {
 }
 
 async function NextJobs() {
-	return await All<MediaJobRow>(
-		`select id as "Id", video_title as "VideoTitle", creator as "Creator", stage as "Stage", duration as "Duration",
+	const Job = await ClaimNext<MediaJobRow>({
+		Table: 'media_jobs',
+		Select: `id as "Id", video_title as "VideoTitle", creator as "Creator", stage as "Stage", duration as "Duration",
 		 transcript_text as "TranscriptText", live_chunk_seconds as "LiveChunkSeconds",
 		 live_analyze_while_recording as "LiveAnalyzeWhileRecording", live_generate_periodic_clips as "LiveGeneratePeriodicClips",
-		 live_marked_moments_json as "LiveMarkedMomentsJson", metadata_json as "MetadataJson", manual_context as "ManualContext"
-		 from media_jobs
-		 where cancelled_at is null
+		 live_marked_moments_json as "LiveMarkedMomentsJson", metadata_json as "MetadataJson", manual_context as "ManualContext"`,
+		Where: `cancelled_at is null
 		   and (live_analyze_while_recording = 1 or live_analyze_while_recording = true or live_generate_periodic_clips = 1 or live_generate_periodic_clips = true)
-		   and stage not in ('failed', 'paused', 'requires manual review')
-		 order by priority desc, id asc
-		 limit 8`
-	);
+		   and stage not in ('failed', 'paused', 'requires manual review')`,
+		OrderBy: 'priority desc, id asc',
+		ClaimSeconds: 5 * 60
+	});
+	return Job ? [Job] : [];
 }
 
 async function ProcessJob(Job: MediaJobRow) {

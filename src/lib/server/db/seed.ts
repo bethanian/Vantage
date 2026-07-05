@@ -198,6 +198,9 @@ function CreateTables() {
 			metadata_json text,
 			downloaded_at text,
 			cancelled_at text,
+			claimed_by text,
+			claimed_at text,
+			claim_expires_at text,
 			created_at text not null,
 			updated_at text
 		);
@@ -242,6 +245,9 @@ function CreateTables() {
 			output_path text,
 			file_size text,
 			error_message text,
+			claimed_by text,
+			claimed_at text,
+			claim_expires_at text,
 			created_at text not null,
 			updated_at text,
 			completed_at text
@@ -257,6 +263,9 @@ function CreateTables() {
 			thumbnail_path text,
 			file_size text,
 			error_message text,
+			claimed_by text,
+			claimed_at text,
+			claim_expires_at text,
 			created_at text not null,
 			updated_at text,
 			completed_at text
@@ -330,6 +339,9 @@ function EnsureMediaJobColumns() {
 	EnsureColumn('media_jobs', 'metadata_json', 'text');
 	EnsureColumn('media_jobs', 'downloaded_at', 'text');
 	EnsureColumn('media_jobs', 'cancelled_at', 'text');
+	EnsureColumn('media_jobs', 'claimed_by', 'text');
+	EnsureColumn('media_jobs', 'claimed_at', 'text');
+	EnsureColumn('media_jobs', 'claim_expires_at', 'text');
 	EnsureColumn('media_jobs', 'created_at', "text not null default ''");
 	EnsureColumn('media_jobs', 'updated_at', 'text');
 }
@@ -404,6 +416,9 @@ function EnsureClipExportColumns() {
 	EnsureColumn('clip_exports', 'output_path', 'text');
 	EnsureColumn('clip_exports', 'file_size', 'text');
 	EnsureColumn('clip_exports', 'error_message', 'text');
+	EnsureColumn('clip_exports', 'claimed_by', 'text');
+	EnsureColumn('clip_exports', 'claimed_at', 'text');
+	EnsureColumn('clip_exports', 'claim_expires_at', 'text');
 	EnsureColumn('clip_exports', 'created_at', "text not null default ''");
 	EnsureColumn('clip_exports', 'updated_at', 'text');
 	EnsureColumn('clip_exports', 'completed_at', 'text');
@@ -418,6 +433,9 @@ function EnsureClipPreviewColumns() {
 	EnsureColumn('clip_previews', 'thumbnail_path', 'text');
 	EnsureColumn('clip_previews', 'file_size', 'text');
 	EnsureColumn('clip_previews', 'error_message', 'text');
+	EnsureColumn('clip_previews', 'claimed_by', 'text');
+	EnsureColumn('clip_previews', 'claimed_at', 'text');
+	EnsureColumn('clip_previews', 'claim_expires_at', 'text');
 	EnsureColumn('clip_previews', 'created_at', "text not null default ''");
 	EnsureColumn('clip_previews', 'updated_at', 'text');
 	EnsureColumn('clip_previews', 'completed_at', 'text');

@@ -111,7 +111,8 @@ export async function load() {
 		 live_marked_moments_json as "LiveMarkedMomentsJson", analysis_report_json as "AnalysisReportJson",
 		 analysis_request_json as "AnalysisRequestJson",
 		 analysis_updated_at as "AnalysisUpdatedAt", metadata_json as "MetadataJson",
-		 downloaded_at as "DownloadedAt", cancelled_at as "CancelledAt", created_at as "CreatedAt", updated_at as "UpdatedAt"
+		 downloaded_at as "DownloadedAt", cancelled_at as "CancelledAt", claimed_by as "ClaimedBy",
+		 claimed_at as "ClaimedAt", claim_expires_at as "ClaimExpiresAt", created_at as "CreatedAt", updated_at as "UpdatedAt"
 		 from media_jobs order by id desc`
 	)).map((Job): MediaJob => ({
 		...Job,
@@ -135,13 +136,15 @@ export async function load() {
 		`select id as "Id", media_job_id as "MediaJobId", clip_candidate_id as "ClipCandidateId", preset as "Preset",
 		 status as "Status", progress as "Progress", output_path as "OutputPath", file_size as "FileSize",
 		 error_message as "ErrorMessage", created_at as "CreatedAt", updated_at as "UpdatedAt",
-		 completed_at as "CompletedAt" from clip_exports order by id desc`
+		 completed_at as "CompletedAt", claimed_by as "ClaimedBy", claimed_at as "ClaimedAt",
+		 claim_expires_at as "ClaimExpiresAt" from clip_exports order by id desc`
 	);
 	const ClipPreviews = await All<ClipPreview>(
 		`select id as "Id", media_job_id as "MediaJobId", clip_candidate_id as "ClipCandidateId",
 		 status as "Status", progress as "Progress", preview_path as "PreviewPath", thumbnail_path as "ThumbnailPath",
 		 file_size as "FileSize", error_message as "ErrorMessage", created_at as "CreatedAt",
-		 updated_at as "UpdatedAt", completed_at as "CompletedAt" from clip_previews order by id desc`
+		 updated_at as "UpdatedAt", completed_at as "CompletedAt", claimed_by as "ClaimedBy",
+		 claimed_at as "ClaimedAt", claim_expires_at as "ClaimExpiresAt" from clip_previews order by id desc`
 	);
 	const ApiCredentials = (await GetApiCredentialStatuses()) as ApiCredentialStatus[];
 	const AppSettings = await LoadAppSettings();

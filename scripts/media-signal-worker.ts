@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { All, EnsureAppDatabaseReady, Get, Run } from '../src/lib/server/db/app-db';
+import { EnsureAppDatabaseReady, Run } from '../src/lib/server/db/app-db';
+import { ClaimNext } from './worker-claim';
 
 type MediaJobRow = {
 	Id: number;
@@ -70,20 +71,18 @@ async function RunWorker() {
 }
 
 async function NextJob() {
-	const Candidates = await RunCandidateQuery();
-	return Candidates.find((Job) => Job.OutputPath && existsSync(Job.OutputPath) && !ParseMetadata(Job.MetadataJson).MediaSignals);
-}
-
-async function RunCandidateQuery() {
-	return All<MediaJobRow>(
-		`select id as "Id", output_path as "OutputPath", metadata_json as "MetadataJson", stage as "Stage"
-		 from media_jobs
-		 where output_path is not null
+	const Job = await ClaimNext<MediaJobRow>({
+		Table: 'media_jobs',
+		Select: `id as "Id", output_path as "OutputPath", metadata_json as "MetadataJson", stage as "Stage"`,
+		Where: `output_path is not null
 		   and cancelled_at is null
+		   and (metadata_json is null or metadata_json not like '%"MediaSignals"%')
 		   and stage not in ('waiting', 'fetching source', 'downloading', 'recording livestream', 'failed', 'paused', 'requires manual review')
-		 order by priority desc, id asc
-		 limit 25`
-	);
+		`,
+		OrderBy: 'priority desc, id asc',
+		ClaimSeconds: 20 * 60
+	});
+	return Job && Job.OutputPath && existsSync(Job.OutputPath) && !ParseMetadata(Job.MetadataJson).MediaSignals ? Job : undefined;
 }
 
 async function ProcessJob(Job: MediaJobRow) {

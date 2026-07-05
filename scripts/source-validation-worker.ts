@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { EnsureAppDatabaseReady, Get, Run } from '../src/lib/server/db/app-db';
+import { ClaimNext } from './worker-claim';
 
 type MediaJobRow = {
 	Id: number;
@@ -66,15 +67,15 @@ async function NextJob() {
 			[SpecificId]
 		);
 	}
-	return await Get<MediaJobRow>(
-		`select id as "Id", source_url as "SourceUrl", source_platform as "SourcePlatform", manual_review_status as "ManualReviewStatus"
-		 from media_jobs
-		 where cancelled_at is null
+	return await ClaimNext<MediaJobRow>({
+		Table: 'media_jobs',
+		Select: `id as "Id", source_url as "SourceUrl", source_platform as "SourcePlatform", manual_review_status as "ManualReviewStatus"`,
+		Where: `cancelled_at is null
 		   and stage = 'fetching source'
-		   and (source_validation_status is null or lower(source_validation_status) like 'queued%')
-		 order by priority desc, id asc
-		 limit 1`
-	);
+		   and (source_validation_status is null or lower(source_validation_status) like 'queued%')`,
+		OrderBy: 'priority desc, id asc',
+		ClaimSeconds: 10 * 60
+	});
 }
 
 async function ValidateJob(Job: MediaJobRow) {

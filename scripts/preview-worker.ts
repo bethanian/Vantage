@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { EnsureAppDatabaseReady, Get, Run } from '../src/lib/server/db/app-db';
+import { ClaimNext } from './worker-claim';
 
 type PreviewRow = {
 	Id: number;
@@ -51,14 +52,13 @@ async function RunWorker() {
 }
 
 async function NextPreview() {
-	return await Get<PreviewRow>(
-		`select clip_previews.id as "Id", clip_previews.media_job_id as "MediaJobId", clip_candidate_id as "ClipCandidateId"
-		 from clip_previews
-		 left join media_jobs on media_jobs.id = clip_previews.media_job_id
-		 where status in ('waiting', 'generating')
-		 order by coalesce(media_jobs.priority, 0) desc, clip_previews.id asc
-		 limit 1`
-	);
+	return await ClaimNext<PreviewRow>({
+		Table: 'clip_previews',
+		Select: `id as "Id", media_job_id as "MediaJobId", clip_candidate_id as "ClipCandidateId"`,
+		Where: `status in ('waiting', 'generating')`,
+		OrderBy: 'id asc',
+		ClaimSeconds: 20 * 60
+	});
 }
 
 async function ProcessPreview(Job: PreviewRow) {

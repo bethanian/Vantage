@@ -2,6 +2,7 @@ import { createWriteStream, existsSync, mkdirSync, readdirSync, statSync } from 
 import { dirname, extname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { EnsureAppDatabaseReady, Get, Run } from '../src/lib/server/db/app-db';
+import { ClaimNext } from './worker-claim';
 
 type MediaJobRow = {
 	Id: number;
@@ -78,19 +79,19 @@ async function RunWorker() {
 }
 
 async function NextJob() {
-	return await Get<MediaJobRow>(
-		`select id as "Id", source_url as "SourceUrl", source_platform as "SourcePlatform", video_title as "VideoTitle",
+	return await ClaimNext<MediaJobRow>({
+		Table: 'media_jobs',
+		Select: `id as "Id", source_url as "SourceUrl", source_platform as "SourcePlatform", video_title as "VideoTitle",
 		 creator as "Creator", media_status as "MediaStatus", manual_review_status as "ManualReviewStatus",
 		 live_recording_mode as "LiveRecordingMode", live_chunk_seconds as "LiveChunkSeconds",
 		 live_analyze_while_recording as "LiveAnalyzeWhileRecording", live_generate_periodic_clips as "LiveGeneratePeriodicClips",
-		 cancelled_at as "CancelledAt"
-		 from media_jobs
-		 where stage = 'waiting'
+		 cancelled_at as "CancelledAt"`,
+		Where: `stage = 'waiting'
 		   and cancelled_at is null
-		   and manual_review_status != 'Rejected'
-		 order by priority desc, id asc
-		 limit 1`
-	);
+		   and manual_review_status != 'Rejected'`,
+		OrderBy: 'priority desc, id asc',
+		ClaimSeconds: 30 * 60
+	});
 }
 
 async function ProcessJob(Job: MediaJobRow) {

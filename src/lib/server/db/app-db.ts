@@ -125,6 +125,9 @@ async function EnsurePostgresSchema() {
 			metadata_json text,
 			downloaded_at text,
 			cancelled_at text,
+			claimed_by text,
+			claimed_at text,
+			claim_expires_at text,
 			created_at text not null,
 			updated_at text
 		)
@@ -156,7 +159,10 @@ async function EnsurePostgresSchema() {
 		['analysis_updated_at', 'text'],
 		['metadata_json', 'text'],
 		['downloaded_at', 'text'],
-		['cancelled_at', 'text']
+		['cancelled_at', 'text'],
+		['claimed_by', 'text'],
+		['claimed_at', 'text'],
+		['claim_expires_at', 'text']
 	]) {
 		await PostgresClient.unsafe(`alter table media_jobs add column if not exists ${Column[0]} ${Column[1]}`);
 	}
@@ -212,11 +218,21 @@ async function EnsurePostgresSchema() {
 			output_path text,
 			file_size text,
 			error_message text,
+			claimed_by text,
+			claimed_at text,
+			claim_expires_at text,
 			created_at text not null,
 			updated_at text,
 			completed_at text
 		)
 	`);
+	for (const Column of [
+		['claimed_by', 'text'],
+		['claimed_at', 'text'],
+		['claim_expires_at', 'text']
+	]) {
+		await PostgresClient.unsafe(`alter table clip_exports add column if not exists ${Column[0]} ${Column[1]}`);
+	}
 	await PostgresClient.unsafe(`
 		create table if not exists clip_previews (
 			id integer primary key,
@@ -228,11 +244,21 @@ async function EnsurePostgresSchema() {
 			thumbnail_path text,
 			file_size text,
 			error_message text,
+			claimed_by text,
+			claimed_at text,
+			claim_expires_at text,
 			created_at text not null,
 			updated_at text,
 			completed_at text
 		)
 	`);
+	for (const Column of [
+		['claimed_by', 'text'],
+		['claimed_at', 'text'],
+		['claim_expires_at', 'text']
+	]) {
+		await PostgresClient.unsafe(`alter table clip_previews add column if not exists ${Column[0]} ${Column[1]}`);
+	}
 	await PostgresClient.unsafe(`
 		create table if not exists worker_heartbeats (
 			id integer primary key,

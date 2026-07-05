@@ -1,6 +1,6 @@
 export type Platform = 'Kick' | 'Twitch' | 'YouTube' | 'TikTok' | 'Instagram' | 'X';
 export type ItemStatus = 'New' | 'Watched' | 'Clipped' | 'Uploaded' | 'Rejected';
-export type ViewName = 'Feed' | 'Creators' | 'Queue' | 'Best Clips' | 'Campaigns' | 'Accounts';
+export type ViewName = 'Feed' | 'Queue' | 'Editor' | 'Creators' | 'Best Clips' | 'Campaigns' | 'Accounts';
 export type MediaJobStage =
 	| 'waiting'
 	| 'fetching source'
@@ -106,6 +106,9 @@ export type MediaJob = {
 	MetadataJson?: string | null;
 	DownloadedAt?: string | null;
 	CancelledAt?: string | null;
+	ClaimedBy?: string | null;
+	ClaimedAt?: string | null;
+	ClaimExpiresAt?: string | null;
 	CreatedAt: string;
 	UpdatedAt?: string | null;
 };
@@ -150,6 +153,9 @@ export type ClipExport = {
 	OutputPath?: string | null;
 	FileSize?: string | null;
 	ErrorMessage?: string | null;
+	ClaimedBy?: string | null;
+	ClaimedAt?: string | null;
+	ClaimExpiresAt?: string | null;
 	CreatedAt: string;
 	UpdatedAt?: string | null;
 	CompletedAt?: string | null;
@@ -165,6 +171,9 @@ export type ClipPreview = {
 	ThumbnailPath?: string | null;
 	FileSize?: string | null;
 	ErrorMessage?: string | null;
+	ClaimedBy?: string | null;
+	ClaimedAt?: string | null;
+	ClaimExpiresAt?: string | null;
 	CreatedAt: string;
 	UpdatedAt?: string | null;
 	CompletedAt?: string | null;

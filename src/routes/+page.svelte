@@ -37,7 +37,7 @@
 	const ActivityEvents = $derived(data.ActivityEvents);
 	const WorkerHeartbeats = $derived(data.WorkerHeartbeats as WorkerHeartbeat[]);
 
-	const Views: ViewName[] = ['Feed', 'Queue', 'Accounts'];
+	const Views: ViewName[] = ['Feed', 'Queue', 'Editor', 'Accounts'];
 	const FeedFilters = ['All', 'Live now', 'Whop', 'Clipping.net', 'Not clipped'];
 	const ContentStatusActions: { Status: ItemStatus; Icon: string; Label: string }[] = [
 		{ Status: 'Watched', Icon: 'ti-eye', Label: 'Mark watched' },
@@ -141,10 +141,13 @@
 			Queued: QueueState.filter((Task) => Task.Targets[Key]).length
 		}))
 	);
+	let IsMobileDevice = $state(false);
 	const LatestSync = $derived(SyncRuns.at(-1));
 	const LocalWorker = $derived(WorkerHeartbeats.find((Heartbeat) => Heartbeat.Role === 'local-primary'));
 	const FallbackWorker = $derived(WorkerHeartbeats.find((Heartbeat) => Heartbeat.Role.includes('fallback')));
 	const WorkerBadge = $derived(WorkerStatusText(LocalWorker, FallbackWorker));
+	const HasLocalHeavyWorker = $derived(HasFreshWorkerCapabilities(LocalWorker, ['media', 'transcript', 'preview', 'export']));
+	const CanUseEditor = $derived(!IsMobileDevice && HasLocalHeavyWorker);
 	const SelectedCampaign = $derived(Campaigns.find((Campaign) => Campaign.Name === SelectedCreator.Campaign));
 	const FeedItems = $derived.by(() => {
 		const Filtered = ContentItems.filter(
@@ -179,6 +182,14 @@
 	const CreatorItems = $derived(
 		ContentItems.filter((Item) => Item.Creator === SelectedCreator.Name).slice(0, 5)
 	);
+	const SelectedEditorTask = $derived(QueueState.find((Task) => Task.Id === SelectedEditorTaskId) ?? QueueState[0]);
+	const EditorJobs = $derived(SelectedEditorTask ? JobsForTask(SelectedEditorTask) : []);
+	const ActiveEditorJob = $derived(EditorJobs[0] ?? (SelectedEditorTask ? undefined : SelectedMediaJob));
+	const ActiveEditorCandidates = $derived(ClipCandidates.filter((Candidate) => Candidate.MediaJobId === ActiveEditorJob?.Id));
+	const ActiveEditorExports = $derived(ClipExports.filter((Export) => Export.MediaJobId === ActiveEditorJob?.Id));
+	const ActiveEditorPreviews = $derived(ClipPreviews.filter((Preview) => Preview.MediaJobId === ActiveEditorJob?.Id));
+	const ActiveEditorTranscriptSegments = $derived(TranscriptSegments(ActiveEditorJob));
+	const ActiveEditorAnalysisReport = $derived(ParseAnalysisReport(ActiveEditorJob?.AnalysisReportJson));
 	const ScoreWeights = $derived([
 		{ Key: 'ScoreRecencyWeight', Label: 'Recency', Value: AppSettings.ScoreRecencyWeight },
 		{ Key: 'ScoreEngagementWeight', Label: 'Engagement', Value: AppSettings.ScoreEngagementWeight },
@@ -190,8 +201,12 @@
 	type ToastKind = 'Success' | 'Error' | 'Info';
 	type SoundKind = 'Tap' | 'Success' | 'Error' | 'Queue' | 'Delete' | 'Sync';
 	type TranscriptSegment = { Start: string; End: string; Text: string; Speaker: string | null; Confidence: number | null };
+	type EditorModeName = 'Download' | 'Transcribe' | 'Clip Cutter';
 	let Toasts = $state<{ Id: number; Kind: ToastKind; Message: string }[]>([]);
 	let EditingTaskId = $state<number | null>(null);
+	let SelectedEditorTaskId = $state<number | null>(null);
+	let ActiveEditorMode = $state<EditorModeName>('Download');
+	let ShowEditorAdvanced = $state(false);
 	let IsSidebarOpen = $state(false);
 	let WorkerNow = $state(Date.now());
 	let AudioContextInstance: AudioContext | null = null;
@@ -202,14 +217,19 @@
 		ActorName = SavedActor;
 		ActorDraft = SavedActor;
 		NeedsActor = !SavedActor;
+		const MobileQuery = window.matchMedia('(max-width: 760px), (pointer: coarse)');
+		const UpdateDeviceType = () => (IsMobileDevice = MobileQuery.matches);
 		const OnKeydown = (Event: KeyboardEvent) => HandlePreviewShortcut(Event);
 		const WorkerRefreshTimer = setInterval(() => {
 			WorkerNow = Date.now();
 			void invalidateAll();
 		}, 45000);
+		UpdateDeviceType();
+		MobileQuery.addEventListener('change', UpdateDeviceType);
 		window.addEventListener('keydown', OnKeydown);
 		return () => {
 			clearInterval(WorkerRefreshTimer);
+			MobileQuery.removeEventListener('change', UpdateDeviceType);
 			window.removeEventListener('keydown', OnKeydown);
 		};
 	});
@@ -284,6 +304,18 @@
 
 	function SelectFeedItem(Item: ContentItem) {
 		SelectedFeedItemId = Item.Id;
+	}
+
+	function SelectEditorTask(Task: ClipTask) {
+		if (!CanUseEditor) {
+			PushToast(EditorLockMessage(), 'Error');
+			return;
+		}
+		SelectedEditorTaskId = Task.Id;
+		const Job = JobsForTask(Task)[0];
+		if (Job) SelectedMediaJobId = Job.Id;
+		ActiveView = 'Editor';
+		PushToast(`Editing ${Task.Source}`, 'Info');
 	}
 
 	function IsQueued(Item: ContentItem) {
@@ -408,6 +440,10 @@
 		return SelectedClipPreviews.find((Preview) => Preview.ClipCandidateId === CandidateId);
 	}
 
+	function EditorPreviewForCandidate(CandidateId: number) {
+		return ActiveEditorPreviews.find((Preview) => Preview.ClipCandidateId === CandidateId);
+	}
+
 	function CandidateCuts(Candidate: ClipCandidate) {
 		if (!Candidate.CutSegmentsJson) return [] as Array<{ StartTime: string; EndTime: string; Label: string }>;
 		try {
@@ -496,7 +532,7 @@
 	}
 
 	function HandlePreviewShortcut(Event: KeyboardEvent) {
-		if (ActiveView !== 'Best Clips' || !PreviewVideo || IsEditableTarget(Event.target)) return;
+		if (!['Best Clips', 'Editor'].includes(ActiveView) || !PreviewVideo || IsEditableTarget(Event.target)) return;
 		if (Event.key === ' ') {
 			Event.preventDefault();
 			TogglePreview();
@@ -606,6 +642,47 @@
 		if (!Heartbeat?.LastSeenAt) return false;
 		const Fresh = WorkerNow - new Date(Heartbeat.LastSeenAt).getTime() < 1000 * 75;
 		return Fresh && ['running', 'running-once'].includes(Heartbeat.Status);
+	}
+
+	function WorkerList(Heartbeat?: WorkerHeartbeat) {
+		return new Set((Heartbeat?.Workers ?? '').split(',').map((Worker) => Worker.trim()).filter(Boolean));
+	}
+
+	function WorkerNames(Heartbeat?: WorkerHeartbeat) {
+		return [...WorkerList(Heartbeat)];
+	}
+
+	function HasFreshWorkerCapabilities(Heartbeat: WorkerHeartbeat | undefined, RequiredWorkers: string[]) {
+		if (!IsWorkerFresh(Heartbeat)) return false;
+		const Available = WorkerList(Heartbeat);
+		return RequiredWorkers.every((Worker) => Available.has(Worker));
+	}
+
+	function WorkerAgeLabel(Heartbeat?: WorkerHeartbeat) {
+		if (!Heartbeat?.LastSeenAt) return 'no heartbeat';
+		const Seconds = Math.max(0, Math.round((WorkerNow - new Date(Heartbeat.LastSeenAt).getTime()) / 1000));
+		if (Seconds < 60) return `${Seconds}s ago`;
+		return `${Math.round(Seconds / 60)}m ago`;
+	}
+
+	function WorkerCapabilityStatus(Heartbeat: WorkerHeartbeat | undefined, RequiredWorkers: string[]) {
+		if (!IsWorkerFresh(Heartbeat)) return 'offline';
+		const Available = WorkerList(Heartbeat);
+		const Missing = RequiredWorkers.filter((Worker) => !Available.has(Worker));
+		return Missing.length ? `missing ${Missing.join(', ')}` : 'ready';
+	}
+
+	function EditorLockMessage() {
+		if (IsMobileDevice) return 'Editor is desktop-only. Use Feed and Queue on mobile.';
+		if (!IsWorkerFresh(LocalWorker)) return 'Start Vantage Local on this PC to unlock Editor tools.';
+		return 'Vantage Local needs media, transcript, preview, and export workers enabled.';
+	}
+
+	function ClaimLabel(ClaimedBy?: string | null, ClaimExpiresAt?: string | null) {
+		if (!ClaimedBy) return '';
+		const ExpiresAt = ClaimExpiresAt ? new Date(ClaimExpiresAt).getTime() : 0;
+		if (ExpiresAt && ExpiresAt < WorkerNow) return '';
+		return `processing on ${ClaimedBy}`;
 	}
 
 	function WorkerBadgeClass() {
@@ -836,7 +913,14 @@
 <nav class="Topnav">
 	<button class="Wordmark" onclick={() => (ActiveView = 'Feed')}>V<em>antage</em></button>
 	{#each Views as View}
-		<button class:Active={ActiveView === View} class="NavLink" onclick={() => ((ActiveView = View), (IsSidebarOpen = false))}>
+		<button
+			class:Active={ActiveView === View}
+			class="NavLink"
+			disabled={View === 'Editor' && !CanUseEditor}
+			title={View === 'Editor' && !CanUseEditor ? EditorLockMessage() : undefined}
+			onclick={() => ((ActiveView = View), (IsSidebarOpen = false))}
+		>
+			{#if View === 'Editor' && !CanUseEditor}<i class="ti ti-lock"></i>{/if}
 			{View.toLowerCase()}
 			{#if View === 'Queue'}<span class="Count">{QueueState.length}</span>{/if}
 		</button>
@@ -1278,10 +1362,13 @@
 								</select>
 								<form method="POST" action="?/PrepareClipDownload" use:enhance={FormFeedback('Download job')}>
 									<input type="hidden" name="ClipTaskId" value={Task.Id} />
-									<button class="IconButton" disabled={!Task.SourceUrl} aria-label={`Prepare download for ${Task.Source}`}>
+									<button class="IconButton" disabled={!Task.SourceUrl || !CanUseEditor} title={!CanUseEditor ? EditorLockMessage() : undefined} aria-label={`Prepare download for ${Task.Source}`}>
 										<i class="ti ti-download"></i>
 									</button>
 								</form>
+								<button class="IconButton" disabled={!CanUseEditor} title={!CanUseEditor ? EditorLockMessage() : undefined} aria-label={`Open editor for ${Task.Source}`} onclick={() => SelectEditorTask(Task)}>
+									<i class="ti ti-movie"></i>
+								</button>
 								<button class="IconButton" aria-label={`Edit clip task ${Task.Id}`} onclick={() => (EditingTaskId = EditingTaskId === Task.Id ? null : Task.Id)}>
 									<i class="ti ti-edit"></i>
 								</button>
@@ -1314,6 +1401,378 @@
 							<span>No clips queued here. Go to Feed, pick a source, then press Queue to clip.</span>
 						</div>
 					{/each}
+				</div>
+			</section>
+		{:else if ActiveView === 'Editor'}
+			<section class="View EditorView">
+				<div class="EditorTopbar">
+					<div>
+						<span class="PanelLabel">Editor</span>
+						<h1>{SelectedEditorTask ? SelectedEditorTask.Source : 'Select a queued clip'}</h1>
+						<p>{SelectedEditorTask ? `${SelectedEditorTask.Creator} / ${SelectedEditorTask.Platform} / ${NormalizeQueueStatus(SelectedEditorTask.Status)}` : 'Pick something from Queue, then choose Download, Transcribe, or Clip Cutter.'}</p>
+					</div>
+					<div class="EditorModeSwitch">
+						{#each ['Download', 'Transcribe', 'Clip Cutter'] as Mode}
+							<button class:Active={ActiveEditorMode === Mode} onclick={() => (ActiveEditorMode = Mode as EditorModeName)}>
+								<i class={`ti ${Mode === 'Download' ? 'ti-download' : Mode === 'Transcribe' ? 'ti-captions' : 'ti-cut'}`}></i>{Mode}
+							</button>
+						{/each}
+					</div>
+					<button class="AdvancedToggle" class:Active={ShowEditorAdvanced} onclick={() => (ShowEditorAdvanced = !ShowEditorAdvanced)}>
+						<i class="ti ti-adjustments"></i>Advanced
+					</button>
+				</div>
+				{#if !CanUseEditor}
+					<div class="CapabilityLockPanel">
+						<i class={`ti ${IsMobileDevice ? 'ti-device-mobile' : 'ti-server-off'}`}></i>
+						<div>
+							<h2>{IsMobileDevice ? 'Editor is desktop-only' : 'Start Vantage Local'}</h2>
+							<p>{EditorLockMessage()}</p>
+						</div>
+					</div>
+				{/if}
+				<div class:Locked={!CanUseEditor} class="EditorLayout">
+					<aside class="EditorQueuePicker">
+						<div class="SectionHead"><span>queued clips</span><span>{QueueState.length}</span></div>
+						<div class="EditorQueueList">
+							{#each QueueState as Task}
+								<button class:Active={SelectedEditorTask?.Id === Task.Id} onclick={() => SelectEditorTask(Task)}>
+									<span class="QueueCreator">{Task.Platform} / {Task.Creator}</span>
+									<strong>{Task.Source}</strong>
+									<small>{Task.Timestamp || '0:00'} / {NormalizeQueueStatus(Task.Status)} / {JobsForTask(Task).length ? 'media ready' : 'needs download'}</small>
+								</button>
+							{:else}
+								<div class="EmptyState MiniEmpty">
+									<i class="ti ti-inbox"></i>
+									<span>No queued clips yet.</span>
+								</div>
+							{/each}
+						</div>
+					</aside>
+					<div class="EditorWorkspace">
+						{#if SelectedEditorTask}
+							<div class="EditorContextCard">
+								<div>
+									<span class="QueueCreator">{SelectedEditorTask.Platform} / {SelectedEditorTask.Creator}</span>
+									<strong>{SelectedEditorTask.Source}</strong>
+									<p>{SelectedEditorTask.Hook || 'No hook saved yet.'}</p>
+								</div>
+								<div class="EditorContextStats">
+									<span>{SelectedEditorTask.Score} score</span>
+									<span>{ActiveEditorJob ? ActiveEditorJob.Stage : 'no media job'}</span>
+									{#if ActiveEditorJob && ClaimLabel(ActiveEditorJob.ClaimedBy, ActiveEditorJob.ClaimExpiresAt)}
+										<span>{ClaimLabel(ActiveEditorJob.ClaimedBy, ActiveEditorJob.ClaimExpiresAt)}</span>
+									{/if}
+									<span>{ActiveEditorCandidates.length} clips</span>
+								</div>
+							</div>
+
+							{#if ActiveEditorMode === 'Download'}
+								<section class="EditorModePanel">
+									<div class="EditorSimpleGrid">
+										<div class="EditorPrimaryAction">
+											<i class="ti ti-download"></i>
+											<div>
+												<h2>{ActiveEditorJob ? 'Source media' : 'Download source'}</h2>
+												<p>{ActiveEditorJob ? `${ActiveEditorJob.MediaStatus} / ${ActiveEditorJob.Progress}% / ${ActiveEditorJob.EstimatedFileSize}` : 'Create a media job from this queued source.'}</p>
+											</div>
+											<form method="POST" action="?/PrepareClipDownload" use:enhance={FormFeedback('Download job')}>
+												<input type="hidden" name="ClipTaskId" value={SelectedEditorTask.Id} />
+												<button class="PrimaryButton" disabled={!SelectedEditorTask.SourceUrl}>
+													<i class="ti ti-download"></i>{ActiveEditorJob ? 'Download again' : 'Start download'}
+												</button>
+											</form>
+										</div>
+										{#if ActiveEditorJob}
+											<article class={`MediaJobCard ${StageClass(ActiveEditorJob.Stage)}`}>
+												<div class="MediaJobMedia">
+													{#if ActiveEditorJob.ThumbnailUrl}
+														<img src={ActiveEditorJob.ThumbnailUrl} alt="" loading="lazy" />
+													{:else}
+														<i class={`ti ${PlatformIcon(ActiveEditorJob.SourcePlatform as Platform) ?? 'ti-video'}`}></i>
+													{/if}
+												</div>
+												<div class="MediaJobBody">
+													<div class="MediaJobTop"><span>{ActiveEditorJob.SourcePlatform}</span><strong>{ActiveEditorJob.VideoTitle}</strong></div>
+													<div class="MediaJobMeta">
+														<span>{ActiveEditorJob.Creator}</span>
+														<span>{ActiveEditorJob.Duration}</span>
+														<span>{ActiveEditorJob.Stage}</span>
+														<span>{ActiveEditorJob.Progress}%</span>
+													</div>
+													<div class="JobProgress"><span style={`width:${Math.max(0, Math.min(100, ActiveEditorJob.Progress))}%`}></span></div>
+													{#if ActiveEditorJob.OutputPath}<div class="OutputPath"><i class="ti ti-folder"></i>{ActiveEditorJob.OutputPath}</div>{/if}
+													{#if ActiveEditorJob.ErrorMessage}<div class="JobError">{ActiveEditorJob.ErrorMessage}</div>{/if}
+												</div>
+												<div class="MediaJobActions">
+													<form method="POST" action="?/RetryMediaJob" use:enhance={FormFeedback('Media job')}>
+														<input type="hidden" name="Id" value={ActiveEditorJob.Id} />
+														<button><i class="ti ti-refresh"></i>Retry</button>
+													</form>
+													<form method="POST" action="?/PauseMediaJob" use:enhance={FormFeedback('Media job')}>
+														<input type="hidden" name="Id" value={ActiveEditorJob.Id} />
+														<button><i class="ti ti-player-pause"></i>Pause</button>
+													</form>
+													<form method="POST" action="?/ResumeMediaJob" use:enhance={FormFeedback('Media job')}>
+														<input type="hidden" name="Id" value={ActiveEditorJob.Id} />
+														<button><i class="ti ti-player-play"></i>Resume</button>
+													</form>
+												</div>
+											</article>
+										{/if}
+									</div>
+									{#if ShowEditorAdvanced}
+										<div class="EditorAdvancedPanel">
+											<form method="POST" action="?/AddExternalMediaJob" class="QuickForm ExternalDownloadForm" use:enhance={FormFeedback('External download')}>
+												<input name="SourceUrl" value={SelectedEditorTask.SourceUrl ?? ''} placeholder="Paste TikTok, Instagram, Kick, Twitch, YouTube, or other video link" required />
+												<input name="VideoTitle" value={SelectedEditorTask.Source} placeholder="Optional title" />
+												<input name="Creator" value={SelectedEditorTask.Creator} placeholder="Optional creator/channel" />
+												<button class="PrimaryButton"><i class="ti ti-download"></i>Add external download</button>
+											</form>
+											<form method="POST" action="?/AddManualMediaJob" enctype="multipart/form-data" class="ManualSourceForm" use:enhance={FormFeedback('Manual source', 'imported')}>
+												<input type="hidden" name="Actor" value={ActorName} />
+												<div class="SectionHead"><span>manual source fallback</span><span>restricted links, uploads, or local files</span></div>
+												<input name="VideoTitle" value={SelectedEditorTask.Source} placeholder="Title" required />
+												<input name="Creator" value={SelectedEditorTask.Creator} placeholder="Creator/channel" required />
+												<input name="SourceUrl" value={SelectedEditorTask.SourceUrl ?? ''} placeholder="Original source URL or manual note" />
+												<select name="Platform" aria-label="Manual source platform">
+													<option>{SelectedEditorTask.Platform}</option><option>Manual</option><option>TikTok</option><option>Instagram</option><option>Kick</option><option>Twitch</option><option>YouTube</option><option>Other</option>
+												</select>
+												<input name="Duration" placeholder="Duration, e.g. 12:34" />
+												<label><span>Video file</span><input name="VideoFile" type="file" accept="video/*" /></label>
+												<label><span>Audio file</span><input name="AudioFile" type="file" accept="audio/*" /></label>
+												<input name="VideoPath" placeholder="Or local video path for desktop worker" />
+												<input name="AudioPath" placeholder="Or local audio path" />
+												<input name="TranscriptLanguage" placeholder="Transcript language, e.g. en" />
+												<textarea name="TranscriptText" placeholder="Optional transcript. Timestamped lines are supported."></textarea>
+												<textarea name="ManualContext" placeholder="Context, login/restriction notes, campaign rules, source details, or anything the analysis should know."></textarea>
+												<button class="PrimaryButton"><i class="ti ti-upload"></i>Import manual source</button>
+											</form>
+										</div>
+									{/if}
+								</section>
+							{:else if ActiveEditorMode === 'Transcribe'}
+								<section class="EditorModePanel">
+									{#if ActiveEditorJob}
+										<div class="EditorPrimaryAction">
+											<i class="ti ti-captions"></i>
+											<div>
+												<h2>{ActiveEditorJob.TranscriptText ? 'Transcript ready' : 'Generate transcript'}</h2>
+												<p>{ActiveEditorJob.TranscriptLanguage ?? 'unknown language'} / {ActiveEditorJob.TranscriptSource ?? 'not generated'} / {ActiveEditorTranscriptSegments.length} lines</p>
+											</div>
+											<form method="POST" action="?/RetryTranscript" use:enhance={FormFeedback('Transcript', 'queued')}>
+												<input type="hidden" name="Id" value={ActiveEditorJob.Id} />
+												<input type="hidden" name="TranscriptModel" value="auto" />
+												<button class="PrimaryButton"><i class="ti ti-refresh"></i>{ActiveEditorJob.TranscriptText ? 'Regenerate' : 'Generate'}</button>
+											</form>
+										</div>
+										<div class="EditorTranscriptPanel">
+											<div class="TranscriptExports">
+												<a href={`/api/media-jobs/${ActiveEditorJob.Id}/transcript/txt`}><i class="ti ti-file-text"></i>TXT</a>
+												<a href={`/api/media-jobs/${ActiveEditorJob.Id}/transcript/srt`}><i class="ti ti-captions"></i>SRT</a>
+												<a href={`/api/media-jobs/${ActiveEditorJob.Id}/transcript/vtt`}><i class="ti ti-captions-filled"></i>VTT</a>
+												<a href={`/api/media-jobs/${ActiveEditorJob.Id}/transcript/json`}><i class="ti ti-braces"></i>JSON</a>
+											</div>
+											<pre class="TranscriptPreview Large">{ActiveEditorJob.TranscriptText ?? 'No transcript yet. Generate one to review captions and line timing here.'}</pre>
+										</div>
+										{#if ShowEditorAdvanced}
+											<div class="EditorAdvancedPanel">
+												<form method="POST" action="?/SaveTranscript" class="TranscriptForm" use:enhance={FormFeedback('Transcript')}>
+													<input type="hidden" name="MediaJobId" value={ActiveEditorJob.Id} />
+													<input type="hidden" name="TranscriptFormat" value="manual" />
+													<label><span>Language</span><input name="TranscriptLanguage" placeholder="en, es, unknown" value={ActiveEditorJob.TranscriptLanguage ?? 'unknown'} /></label>
+													<label><span>Search</span><input bind:value={TranscriptSearch} placeholder="Find words or phrases" /><small>{TranscriptMatchCount} matches</small></label>
+													<label class="StackedField"><span>Transcript</span><textarea name="TranscriptText" placeholder="Paste a timestamped transcript, captions, or rough notes before analysis.">{ActiveEditorJob.TranscriptText ?? ''}</textarea></label>
+													<button class="PrimaryButton"><i class="ti ti-file-text"></i>Save transcript</button>
+												</form>
+												<form method="POST" action="?/QueueTranscriptTranslation" class="TranscriptTranslateForm" use:enhance={FormFeedback('Translation', 'queued')}>
+													<input type="hidden" name="MediaJobId" value={ActiveEditorJob.Id} />
+													<label><span>AI translate to</span><input name="TranslationLanguage" placeholder="en, es, fr" value={ActiveEditorJob.TranscriptTranslationLanguage ?? 'en'} /></label>
+													<button><i class="ti ti-wand"></i>Queue AI translation</button>
+												</form>
+											</div>
+										{/if}
+									{:else}
+										<div class="EmptyState InlineEmpty"><i class="ti ti-download-off"></i><span>Download this queued source before transcribing.</span></div>
+									{/if}
+								</section>
+							{:else}
+								<section class="EditorModePanel ClipWorkbench">
+									{#if ActiveEditorJob}
+										<div class="EditorPrimaryAction">
+											<i class="ti ti-cut"></i>
+											<div>
+												<h2>Clip Cutter</h2>
+												<p>{ActiveEditorCandidates.length ? `${ActiveEditorCandidates.length} candidate clips ready` : 'Generate best clips, then trim them on the timeline.'}</p>
+											</div>
+											<form method="POST" action="?/GenerateClipCandidates" use:enhance={FormFeedback('Clip analysis', 'queued')}>
+												<input type="hidden" name="MediaJobId" value={ActiveEditorJob.Id} />
+												<input type="hidden" name="ClipCountMode" value="best 5 clips" />
+												<input type="hidden" name="PreferredClipStyle" value="viral clipping" />
+												<input type="hidden" name="TargetPlatform" value="TikTok" />
+												<button class="PrimaryButton"><i class="ti ti-sparkles"></i>{ActiveEditorCandidates.length ? 'Find again' : 'Find best clips'}</button>
+											</form>
+										</div>
+										<div class="EditorTimelineShell">
+											<div class="EditorPreviewPane">
+												<div class="VideoPreviewShell">
+													{#if SourceVideoUrl(ActiveEditorJob)}
+														<video
+															bind:this={PreviewVideo}
+															class="PreviewVideo"
+															src={SourceVideoUrl(ActiveEditorJob)}
+															playsinline
+															onloadedmetadata={() => {
+																PreviewDuration = PreviewVideo?.duration ?? 0;
+																SetPreviewVolume(PreviewVolume);
+																SetPreviewSpeed(PreviewSpeed);
+															}}
+															ontimeupdate={() => (PreviewTime = PreviewVideo?.currentTime ?? 0)}
+														>
+															<track kind="captions" src={ActiveEditorJob.TranscriptText ? `/api/media-jobs/${ActiveEditorJob.Id}/transcript/vtt` : 'data:text/vtt,WEBVTT'} default />
+														</video>
+													{:else}
+														<div class="PreviewScreen"><i class="ti ti-video-off"></i><span>Download or attach a source video to enable preview.</span></div>
+													{/if}
+													<div class="PlayerControls">
+														<button aria-label="Play preview" onclick={PlayPreview}><i class="ti ti-player-play"></i></button>
+														<button aria-label="Pause preview" onclick={PausePreview}><i class="ti ti-player-pause"></i></button>
+														<button aria-label="Stop preview" onclick={StopPreview}><i class="ti ti-player-stop"></i></button>
+														<button aria-label="Previous frame" onclick={() => StepPreview(-1)}><i class="ti ti-player-skip-back"></i></button>
+														<button aria-label="Next frame" onclick={() => StepPreview(1)}><i class="ti ti-player-skip-forward"></i></button>
+														<label><i class="ti ti-volume"></i><input type="range" min="0" max="1" step="0.05" value={PreviewVolume} oninput={(Event) => SetPreviewVolume(Number(Event.currentTarget.value))} /></label>
+														<label><i class="ti ti-gauge"></i><select value={PreviewSpeed} onchange={(Event) => SetPreviewSpeed(Number(Event.currentTarget.value))}>
+															<option value="0.5">0.5x</option><option value="0.75">0.75x</option><option value="1">1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option>
+														</select></label>
+														<label><i class="ti ti-zoom-in"></i><input type="range" min="1" max="4" step="0.25" bind:value={TimelineZoom} /></label>
+														<span>{TimestampLabel(PreviewTime)} / {TimestampLabel(PreviewDuration)}</span>
+														<button aria-label="Fullscreen preview" onclick={FullscreenPreview}><i class="ti ti-maximize"></i></button>
+													</div>
+												</div>
+											</div>
+											<div class="EditorTimeline">
+												<input class="PreviewScrubber" type="range" min="0" max={Math.max(1, PreviewDuration)} step="0.1" value={PreviewTime} oninput={(Event) => SeekPreview(Number(Event.currentTarget.value))} />
+												<div class="TimelineRuler">
+													<span>0:00</span><span>{TimestampLabel((PreviewDuration || 600) / 4)}</span><span>{TimestampLabel((PreviewDuration || 600) / 2)}</span><span>{TimestampLabel(((PreviewDuration || 600) / 4) * 3)}</span><span>{TimestampLabel(PreviewDuration || 600)}</span>
+												</div>
+												<div class="EditorTrack VideoTrack">
+													<strong>Video</strong>
+													<div class="TrackLane">
+														{#each ActiveEditorCandidates as Candidate}
+															<button class="ClipRegion" onclick={() => SeekPreview(CandidateStartSeconds(Candidate))} style={`left:${CandidateLeft(Candidate)}%; width:${CandidateWidth(Candidate)}%`}>
+																<span>#{Candidate.ClipNumber}</span>
+																<strong>{Candidate.ViralScore}</strong>
+															</button>
+														{/each}
+													</div>
+												</div>
+												<div class="EditorTrack AudioTrack">
+													<strong>Audio</strong>
+													<div class="TrackLane WaveLane">
+														{#each Array(42) as _, Index}<span style={`height:${18 + ((Index * 13) % 34)}px`}></span>{/each}
+													</div>
+												</div>
+												{#if ActiveEditorTranscriptSegments.length}
+													<div class="EditorTrack TranscriptTrack">
+														<strong>Transcript</strong>
+														<div class="TrackLane TranscriptLane">
+															{#each ActiveEditorTranscriptSegments.filter(SegmentMatchesSearch).slice(0, 18) as Segment}
+																<button class:Active={SegmentIsActive(Segment)} onclick={() => SeekPreview(TimestampSeconds(Segment.Start))} style={`left:${Math.min(94, (TimestampSeconds(Segment.Start) / (PreviewDuration || 600)) * 100 * TimelineZoom)}%; width:12%`}>
+																	{Segment.Text}
+																</button>
+															{/each}
+														</div>
+													</div>
+												{/if}
+												<div class="TimelineQuickEdit">
+													{#each ActiveEditorCandidates as Candidate}
+														<div>
+															<button class="TimelineClipJump" onclick={() => SeekPreview(CandidateStartSeconds(Candidate))}>
+																<strong>#{Candidate.ClipNumber}</strong>
+																<span>{Candidate.StartTime} - {Candidate.EndTime}</span>
+															</button>
+															{#each ['move-earlier', 'move-later', 'start-earlier', 'start-later', 'end-earlier', 'end-later'] as Operation}
+																<form method="POST" action="?/AdjustClipCandidateWindow" use:enhance={FormFeedback('Clip window')}>
+																	<input type="hidden" name="Id" value={Candidate.Id} />
+																	<input type="hidden" name="Operation" value={Operation} />
+																	<input type="hidden" name="Step" value="1" />
+																	<button aria-label={`${Operation} clip ${Candidate.ClipNumber}`}><i class={`ti ${Operation.includes('earlier') ? 'ti-arrow-left' : 'ti-arrow-right'}`}></i></button>
+																</form>
+															{/each}
+														</div>
+													{/each}
+												</div>
+											</div>
+										</div>
+										<div class="ClipCandidateGrid">
+											{#each ActiveEditorCandidates as Candidate}
+												{@const Preview = EditorPreviewForCandidate(Candidate.Id)}
+												<article class="ClipCandidateCard">
+													<div class="CandidateTop"><span>Clip {Candidate.ClipNumber}</span><strong>{Candidate.ViralScore}</strong></div>
+													<h2>{Candidate.Title || Candidate.Category}</h2>
+													<p>{Candidate.StartTime} - {Candidate.EndTime} / {Candidate.Duration}</p>
+													<button class="PreviewCandidateButton" onclick={() => SeekPreview(CandidateStartSeconds(Candidate))}><i class="ti ti-player-play"></i>Preview this clip</button>
+													<div class="CandidateActions">
+														<form method="POST" action="?/UpdateClipCandidateStatus" use:enhance={FormFeedback('Clip candidate')}>
+															<input type="hidden" name="Id" value={Candidate.Id} />
+															<input type="hidden" name="Status" value="Approved" />
+															<button>Approve</button>
+														</form>
+														<form method="POST" action="?/QueueClipPreview" use:enhance={FormFeedback('Clip preview', 'queued')}>
+															<input type="hidden" name="ClipCandidateId" value={Candidate.Id} />
+															<button>{Preview ? `${Preview.Status} ${Preview.Progress}%` : 'Generate preview'}</button>
+														</form>
+														<form method="POST" action="?/QueueClipExport" use:enhance={FormFeedback('Clip export', 'queued')}>
+															<input type="hidden" name="ClipCandidateId" value={Candidate.Id} />
+															<input type="hidden" name="Preset" value="TikTok" />
+															<button>Export</button>
+														</form>
+													</div>
+												</article>
+											{:else}
+												<div class="EmptyState InlineEmpty"><i class="ti ti-sparkles"></i><span>No best clips yet. Run Find best clips to populate the timeline.</span></div>
+											{/each}
+										</div>
+										{#if ShowEditorAdvanced}
+											<div class="EditorAdvancedPanel">
+												<form method="POST" action="?/GenerateClipCandidates" class="ClipAnalysisForm" use:enhance={FormFeedback('Clip analysis', 'queued')}>
+													<input type="hidden" name="MediaJobId" value={ActiveEditorJob.Id} />
+													<label><span>Output</span><select name="ClipCountMode"><option>best 3 clips</option><option selected>best 5 clips</option><option>best 10 clips</option><option value="automatic">automatically determine</option><option value="custom">custom</option></select></label>
+													<label><span>Custom</span><input name="CustomClipCount" type="number" min="1" max="30" value="5" /></label>
+													<label><span>Min duration</span><input name="MinimumDuration" value="20s" /></label>
+													<label><span>Max duration</span><input name="MaximumDuration" value="75s" /></label>
+													<label><span>Target</span><select name="TargetPlatform"><option>TikTok</option><option>YouTube Shorts</option><option>Instagram Reels</option><option>X</option></select></label>
+													<input name="PreferredTopics" placeholder="Preferred topics" />
+													<input name="MomentsToAvoid" placeholder="Moments to avoid" />
+													<input name="PreferredClipStyle" placeholder="Clip style, e.g. fast reaction, drama, payoff" value="viral clipping" />
+													<label class="InlineToggle"><input type="checkbox" name="IncludeContext" checked /> Include setup</label>
+													<label class="InlineToggle"><input type="checkbox" name="LoopEnding" /> Loop ending</label>
+													<label class="InlineToggle"><input type="checkbox" name="PrioritizeControversy" /> Prioritize controversy</label>
+													<label class="InlineToggle"><input type="checkbox" name="ProfanityAllowed" /> Profanity allowed</label>
+													<label class="InlineToggle"><input type="checkbox" name="AllowOverlap" /> Allow overlap</label>
+													<button class="PrimaryButton"><i class="ti ti-sparkles"></i>Queue AI analysis</button>
+												</form>
+												{#if ActiveEditorAnalysisReport}
+													<div class="AnalysisReportPanel">
+														<div class="SectionHead"><span>analysis report</span><a href={`/api/media-jobs/${ActiveEditorJob.Id}/analysis-report`} target="_blank" rel="noreferrer">export json</a></div>
+														<div class="SignalGrid">
+															{#each ActiveEditorAnalysisReport.SignalCoverage ?? [] as Signal}
+																<div><strong>{Signal.Signal}</strong><span>{Signal.Status}</span></div>
+															{/each}
+														</div>
+													</div>
+												{/if}
+											</div>
+										{/if}
+									{:else}
+										<div class="EmptyState InlineEmpty"><i class="ti ti-download-off"></i><span>Download this queued source before opening the clip cutter.</span></div>
+									{/if}
+								</section>
+							{/if}
+						{:else}
+							<div class="EmptyState InlineEmpty"><i class="ti ti-edit"></i><span>Choose a queued clip to start editing.</span></div>
+						{/if}
+					</div>
 				</div>
 			</section>
 		{:else if ActiveView === 'Best Clips'}
@@ -1994,6 +2453,57 @@
 						</button>
 					</div>
 				</div>
+				<div class="WorkerHealthGrid">
+					<section class={`WorkerHealthCard ${IsMobileDevice ? 'Fallback' : CanUseEditor ? 'Online' : 'Offline'}`}>
+						<div class="WorkerHealthTop">
+							<i class={`ti ${IsMobileDevice ? 'ti-device-mobile' : 'ti-device-desktop'}`}></i>
+							<div>
+								<h2>This device</h2>
+								<p>{IsMobileDevice ? 'Feed and Queue only' : CanUseEditor ? 'Editor unlocked' : EditorLockMessage()}</p>
+							</div>
+						</div>
+						<div class="WorkerHealthMeta">
+							<span>{IsMobileDevice ? 'mobile-safe' : 'desktop'}</span>
+							<span>{CanUseEditor ? 'heavy tools enabled' : 'heavy tools locked'}</span>
+						</div>
+					</section>
+					<section class={`WorkerHealthCard ${IsWorkerFresh(LocalWorker) ? HasLocalHeavyWorker ? 'Online' : 'Fallback' : 'Offline'}`}>
+						<div class="WorkerHealthTop">
+							<i class="ti ti-cpu"></i>
+							<div>
+								<h2>Vantage Local</h2>
+								<p>{WorkerCapabilityStatus(LocalWorker, ['media', 'transcript', 'preview', 'export'])}</p>
+							</div>
+						</div>
+						<div class="WorkerHealthMeta">
+							<span>{LocalWorker?.InstanceId ?? 'not connected'}</span>
+							<span>{WorkerAgeLabel(LocalWorker)}</span>
+						</div>
+						{#if LocalWorker}
+							<div class="WorkerPills">
+								{#each WorkerNames(LocalWorker) as Worker}<span>{Worker}</span>{/each}
+							</div>
+						{/if}
+					</section>
+					<section class={`WorkerHealthCard ${IsWorkerFresh(FallbackWorker) ? 'Fallback' : 'Offline'}`}>
+						<div class="WorkerHealthTop">
+							<i class="ti ti-cloud"></i>
+							<div>
+								<h2>Railway fallback</h2>
+								<p>{IsWorkerFresh(FallbackWorker) ? 'lightweight fallback online' : 'fallback offline'}</p>
+							</div>
+						</div>
+						<div class="WorkerHealthMeta">
+							<span>{FallbackWorker?.InstanceId ?? 'not connected'}</span>
+							<span>{WorkerAgeLabel(FallbackWorker)}</span>
+						</div>
+						{#if FallbackWorker}
+							<div class="WorkerPills">
+								{#each WorkerNames(FallbackWorker) as Worker}<span>{Worker}</span>{/each}
+							</div>
+						{/if}
+					</section>
+				</div>
 				<div class="ApiKeyPanel">
 					<div>
 						<h2>API keys</h2>
@@ -2277,6 +2787,17 @@
 		color: var(--Page);
 	}
 
+	.NavLink:disabled {
+		color: #5f5d56;
+		cursor: not-allowed;
+		opacity: 0.72;
+	}
+
+	.NavLink:disabled:hover {
+		color: #5f5d56;
+		transform: none;
+	}
+
 	.NavLink.Active {
 		border-bottom-color: #8dbf9e;
 		color: var(--Page);
@@ -2507,7 +3028,6 @@
 
 	.Chip,
 	.Subheader select,
-	table select,
 	.PrimaryButton,
 	.ConnectedText {
 		border: 1px solid var(--Rule);
@@ -3385,23 +3905,6 @@
 		margin: 0;
 	}
 
-	.TaskTargets span.Done {
-		background: var(--GreenSoft);
-		color: var(--Green);
-	}
-
-	.TaskTargets a {
-		background: var(--BlueSoft);
-		border-radius: 4px;
-		color: var(--Blue);
-		display: inline-flex;
-		font-size: 10px;
-		margin: 0;
-		padding: 2px 6px;
-		text-decoration: none;
-		text-transform: uppercase;
-	}
-
 	.QueueBoard {
 		display: grid;
 		gap: 10px;
@@ -3688,15 +4191,6 @@
 		grid-template-columns: repeat(6, minmax(0, 1fr)) auto;
 	}
 
-	.QuickForm label {
-		align-items: center;
-		color: var(--Ink2);
-		display: inline-flex;
-		font-size: 11px;
-		gap: 4px;
-		white-space: nowrap;
-	}
-
 	.NotesCard span {
 		color: var(--Ink3);
 		font-size: 10px;
@@ -3711,35 +4205,6 @@
 
 	.TableWrap {
 		padding: 0;
-	}
-
-	table {
-		border-collapse: collapse;
-		width: 100%;
-	}
-
-	th,
-	td {
-		border-bottom: 1px solid var(--RuleSoft);
-		padding: 12px 16px;
-		text-align: left;
-		vertical-align: top;
-	}
-
-	th {
-		background: var(--Surface);
-		color: var(--Ink3);
-		font-size: 10px;
-		letter-spacing: 0.12em;
-		position: sticky;
-		text-transform: uppercase;
-		top: 0;
-	}
-
-	.EditRow td {
-		background: var(--Surface);
-		padding-bottom: 16px;
-		padding-top: 0;
 	}
 
 	.RowActions {
@@ -3761,10 +4226,6 @@
 		height: 30px;
 		place-items: center;
 		width: 30px;
-	}
-
-	.MediaJobRow td {
-		background: color-mix(in srgb, var(--Surface) 72%, var(--Page));
 	}
 
 	.MediaJobList {
@@ -3911,12 +4372,6 @@
 		padding: 8px;
 	}
 
-	.LiveControlForm label,
-	.LiveMarkForm label {
-		display: grid;
-		gap: 4px;
-	}
-
 	.LiveControlForm span {
 		color: var(--Ink3);
 		font-size: 10px;
@@ -4009,6 +4464,374 @@
 	.MediaJobActions button:hover {
 		border-color: var(--Ink3);
 		color: var(--Green);
+	}
+
+	.EditorView {
+		background: var(--Page);
+	}
+
+	.EditorTopbar {
+		align-items: center;
+		background: var(--Surface);
+		border-bottom: 1px solid var(--Rule);
+		display: grid;
+		gap: 16px;
+		grid-template-columns: minmax(260px, 1fr) auto auto;
+		padding: 16px 22px;
+	}
+
+	.EditorTopbar h1 {
+		font-family: 'Fraunces', serif;
+		font-size: 28px;
+		font-weight: 400;
+		line-height: 1;
+		margin-top: 4px;
+	}
+
+	.EditorTopbar p {
+		color: var(--Ink2);
+		font-size: 12px;
+		margin-top: 6px;
+	}
+
+	.CapabilityLockPanel {
+		align-items: center;
+		background: var(--Surface);
+		border-bottom: 1px solid var(--Rule);
+		display: flex;
+		gap: 12px;
+		padding: 14px 22px;
+	}
+
+	.CapabilityLockPanel > i {
+		align-items: center;
+		background: var(--GreenSoft);
+		border-radius: 10px;
+		color: var(--Green);
+		display: grid;
+		font-size: 24px;
+		height: 44px;
+		place-items: center;
+		width: 44px;
+	}
+
+	.CapabilityLockPanel h2 {
+		font-family: 'Fraunces', serif;
+		font-size: 22px;
+		font-weight: 400;
+	}
+
+	.CapabilityLockPanel p {
+		color: var(--Ink2);
+		font-size: 12px;
+		margin-top: 3px;
+	}
+
+	.EditorModeSwitch {
+		background: var(--Page);
+		border: 1px solid var(--Rule);
+		border-radius: 8px;
+		display: flex;
+		padding: 3px;
+	}
+
+	.EditorModeSwitch button,
+	.AdvancedToggle {
+		align-items: center;
+		background: transparent;
+		border: 0;
+		border-radius: 6px;
+		color: var(--Ink2);
+		display: inline-flex;
+		gap: 6px;
+		padding: 8px 10px;
+		white-space: nowrap;
+	}
+
+	.EditorModeSwitch button.Active,
+	.EditorModeSwitch button:hover,
+	.AdvancedToggle.Active,
+	.AdvancedToggle:hover {
+		background: var(--Ink);
+		color: var(--Page);
+		transform: translateY(-1px);
+	}
+
+	.AdvancedToggle {
+		background: var(--Page);
+		border: 1px solid var(--Rule);
+	}
+
+	.EditorLayout {
+		display: grid;
+		flex: 1;
+		grid-template-columns: 310px minmax(0, 1fr);
+		min-height: 0;
+	}
+
+	.EditorLayout.Locked {
+		opacity: 0.38;
+		pointer-events: none;
+	}
+
+	.EditorQueuePicker {
+		background: var(--Surface);
+		border-right: 1px solid var(--Rule);
+		display: grid;
+		grid-template-rows: auto minmax(0, 1fr);
+		min-height: 0;
+		padding: 14px;
+	}
+
+	.EditorQueueList {
+		display: grid;
+		gap: 8px;
+		overflow-y: auto;
+		padding-right: 4px;
+	}
+
+	.EditorQueueList button {
+		background: var(--Page);
+		border: 1px solid var(--Rule);
+		border-radius: 8px;
+		display: grid;
+		gap: 4px;
+		padding: 10px;
+		text-align: left;
+	}
+
+	.EditorQueueList button:hover,
+	.EditorQueueList button.Active {
+		border-color: var(--Green);
+		box-shadow: 0 10px 28px rgba(26, 25, 22, 0.08);
+		transform: translateY(-2px);
+	}
+
+	.EditorQueueList strong {
+		font-size: 13px;
+		line-height: 1.25;
+	}
+
+	.EditorQueueList small {
+		color: var(--Ink3);
+		font-size: 11px;
+	}
+
+	.EditorWorkspace {
+		display: grid;
+		gap: 14px;
+		overflow-y: auto;
+		padding: 18px;
+	}
+
+	.EditorContextCard,
+	.EditorModePanel,
+	.EditorAdvancedPanel {
+		background: var(--Surface);
+		border: 1px solid var(--Rule);
+		border-radius: 8px;
+	}
+
+	.EditorContextCard {
+		align-items: center;
+		display: flex;
+		gap: 14px;
+		justify-content: space-between;
+		padding: 14px;
+	}
+
+	.EditorContextCard strong {
+		display: block;
+		font-family: 'Fraunces', serif;
+		font-size: 22px;
+		font-weight: 400;
+		margin: 4px 0;
+	}
+
+	.EditorContextCard p {
+		color: var(--Ink2);
+		font-size: 12px;
+	}
+
+	.EditorContextStats {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		justify-content: flex-end;
+	}
+
+	.EditorContextStats span {
+		background: var(--Page);
+		border: 1px solid var(--RuleSoft);
+		border-radius: 999px;
+		color: var(--Ink2);
+		font-size: 11px;
+		padding: 5px 8px;
+	}
+
+	.EditorModePanel {
+		display: grid;
+		gap: 14px;
+		padding: 14px;
+	}
+
+	.EditorSimpleGrid {
+		display: grid;
+		gap: 12px;
+	}
+
+	.EditorPrimaryAction {
+		align-items: center;
+		background: var(--Page);
+		border: 1px solid var(--RuleSoft);
+		border-radius: 8px;
+		display: grid;
+		gap: 12px;
+		grid-template-columns: 46px minmax(0, 1fr) auto;
+		padding: 12px;
+	}
+
+	.EditorPrimaryAction > i {
+		align-items: center;
+		background: var(--GreenSoft);
+		border-radius: 10px;
+		color: var(--Green);
+		display: grid;
+		font-size: 24px;
+		height: 46px;
+		place-items: center;
+		width: 46px;
+	}
+
+	.EditorPrimaryAction h2 {
+		font-family: 'Fraunces', serif;
+		font-size: 22px;
+		font-weight: 400;
+	}
+
+	.EditorPrimaryAction p {
+		color: var(--Ink2);
+		font-size: 12px;
+		margin-top: 4px;
+	}
+
+	.EditorAdvancedPanel {
+		display: grid;
+		gap: 12px;
+		padding: 12px;
+	}
+
+	.EditorTranscriptPanel {
+		display: grid;
+		gap: 10px;
+	}
+
+	.TranscriptPreview.Large {
+		max-height: 360px;
+		min-height: 220px;
+	}
+
+	.EditorTimelineShell {
+		background: #161512;
+		border: 1px solid #2f2c26;
+		border-radius: 10px;
+		color: var(--Page);
+		display: grid;
+		gap: 0;
+		grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
+		overflow: hidden;
+	}
+
+	.EditorPreviewPane {
+		border-right: 1px solid #2f2c26;
+		min-width: 0;
+	}
+
+	.EditorTimeline {
+		display: grid;
+		gap: 0;
+		min-width: 0;
+	}
+
+	.TimelineRuler {
+		align-items: center;
+		background: #25231f;
+		border-bottom: 1px solid #37342d;
+		color: #8d897f;
+		display: grid;
+		font-size: 10px;
+		grid-template-columns: repeat(5, 1fr);
+		padding: 7px 10px;
+	}
+
+	.TimelineRuler span:not(:first-child) {
+		text-align: right;
+	}
+
+	.EditorTrack {
+		display: grid;
+		grid-template-columns: 82px minmax(0, 1fr);
+		min-height: 62px;
+	}
+
+	.EditorTrack > strong {
+		align-items: center;
+		background: #201e1a;
+		border-bottom: 1px solid #37342d;
+		border-right: 1px solid #37342d;
+		color: #b8b5ad;
+		display: flex;
+		font-size: 11px;
+		padding: 0 10px;
+		text-transform: uppercase;
+	}
+
+	.TrackLane {
+		background:
+			linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px) 0 0 / 12.5% 100%,
+			#181713;
+		border-bottom: 1px solid #37342d;
+		min-height: 62px;
+		overflow: hidden;
+		position: relative;
+	}
+
+	.WaveLane {
+		align-items: center;
+		display: flex;
+		gap: 4px;
+		padding: 0 12px;
+	}
+
+	.WaveLane span {
+		background: #6f9e7b;
+		border-radius: 999px;
+		display: block;
+		flex: 1;
+		max-width: 8px;
+		opacity: 0.75;
+	}
+
+	.TranscriptLane button {
+		background: #34312b;
+		border: 1px solid #5b554b;
+		border-radius: 5px;
+		color: #e6e1d8;
+		font-size: 10px;
+		height: 34px;
+		overflow: hidden;
+		padding: 3px 5px;
+		position: absolute;
+		text-align: left;
+		text-overflow: ellipsis;
+		top: 14px;
+		white-space: nowrap;
+	}
+
+	.TranscriptLane button.Active,
+	.TranscriptLane button:hover {
+		background: #2e3a2f;
+		border-color: #6c9b79;
 	}
 
 	.ClipCutterLayout {
@@ -4770,14 +5593,6 @@
 		grid-template-columns: minmax(160px, 1fr) 86px minmax(160px, 1fr) 70px 110px repeat(3, auto) auto;
 	}
 
-	.InlineEditForm label {
-		align-items: center;
-		color: var(--Ink2);
-		display: inline-flex;
-		font-size: 11px;
-		gap: 4px;
-	}
-
 	.Hook {
 		color: var(--Ink2);
 		font-family: 'Fraunces', serif;
@@ -4935,6 +5750,95 @@
 	.AccountGrid {
 		grid-template-columns: repeat(3, minmax(0, 1fr));
 		margin-bottom: 28px;
+	}
+
+	.WorkerHealthGrid {
+		display: grid;
+		gap: 12px;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		margin: 12px 0 28px;
+	}
+
+	.WorkerHealthCard {
+		background: var(--Surface);
+		border: 1px solid var(--Rule);
+		border-radius: 8px;
+		display: grid;
+		gap: 12px;
+		padding: 14px;
+	}
+
+	.WorkerHealthCard.Online {
+		border-color: #b0d0bc;
+	}
+
+	.WorkerHealthCard.Fallback {
+		border-color: #d7c58f;
+	}
+
+	.WorkerHealthCard.Offline {
+		opacity: 0.82;
+	}
+
+	.WorkerHealthTop {
+		align-items: center;
+		display: flex;
+		gap: 10px;
+	}
+
+	.WorkerHealthTop > i {
+		align-items: center;
+		background: var(--GreenSoft);
+		border-radius: 10px;
+		color: var(--Green);
+		display: grid;
+		font-size: 22px;
+		height: 40px;
+		place-items: center;
+		width: 40px;
+	}
+
+	.WorkerHealthCard.Fallback .WorkerHealthTop > i {
+		background: #f8edca;
+		color: #7a5e0f;
+	}
+
+	.WorkerHealthCard.Offline .WorkerHealthTop > i {
+		background: var(--RuleSoft);
+		color: var(--Ink3);
+	}
+
+	.WorkerHealthTop h2 {
+		font-family: 'Fraunces', serif;
+		font-size: 20px;
+		font-weight: 400;
+	}
+
+	.WorkerHealthTop p,
+	.WorkerHealthMeta span {
+		color: var(--Ink2);
+		font-size: 12px;
+	}
+
+	.WorkerHealthMeta,
+	.WorkerPills {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.WorkerHealthMeta span,
+	.WorkerPills span {
+		background: var(--Page);
+		border: 1px solid var(--RuleSoft);
+		border-radius: 999px;
+		padding: 4px 7px;
+	}
+
+	.WorkerPills span {
+		color: var(--Ink3);
+		font-size: 10px;
+		text-transform: uppercase;
 	}
 
 	.ApiKeyPanel {

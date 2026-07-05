@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { basename, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { EnsureAppDatabaseReady, Get, Run } from '../src/lib/server/db/app-db';
+import { ClaimNext } from './worker-claim';
 
 type MediaJobRow = {
 	Id: number;
@@ -69,16 +70,17 @@ async function RunWorker() {
 }
 
 async function NextJob() {
-	return await Get<MediaJobRow>(
-		`select id as "Id", source_url as "SourceUrl", video_title as "VideoTitle", output_path as "OutputPath",
+	return await ClaimNext<MediaJobRow>({
+		Table: 'media_jobs',
+		Select: `id as "Id", source_url as "SourceUrl", video_title as "VideoTitle", output_path as "OutputPath",
 		 transcript_model as "TranscriptModel", metadata_json as "MetadataJson", cancelled_at as "CancelledAt", stage as "Stage"
-		 from media_jobs
-		 where stage in ('retrieving transcript', 'generating transcript')
+		`,
+		Where: `stage in ('retrieving transcript', 'generating transcript')
 		   and transcript_text is null
-		   and cancelled_at is null
-		 order by priority desc, id asc
-		 limit 1`
-	);
+		   and cancelled_at is null`,
+		OrderBy: 'priority desc, id asc',
+		ClaimSeconds: 20 * 60
+	});
 }
 
 async function ProcessJob(Job: MediaJobRow) {

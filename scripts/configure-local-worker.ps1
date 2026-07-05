@@ -68,9 +68,11 @@ $DefaultPreviewDir = if ($Existing["VANTAGE_PREVIEW_DIR"]) { $Existing["VANTAGE_
 $DefaultExportDir = if ($Existing["VANTAGE_EXPORT_DIR"]) { $Existing["VANTAGE_EXPORT_DIR"] } else { $ExportDir }
 $DefaultGeminiModel = if ($Existing["VANTAGE_GEMINI_MODEL"]) { $Existing["VANTAGE_GEMINI_MODEL"] } else { "gemini-2.5-flash" }
 $DefaultSyncInterval = if ($Existing["VANTAGE_SYNC_INTERVAL_MINUTES"]) { $Existing["VANTAGE_SYNC_INTERVAL_MINUTES"] } else { "30" }
+$DefaultDashboardUrl = if ($Existing["VANTAGE_DASHBOARD_URL"]) { $Existing["VANTAGE_DASHBOARD_URL"] } else { "http://localhost:5173" }
 
 $Values = [ordered]@{
 	POSTGRES_URL = Ask-Value "POSTGRES_URL" "Hosted Postgres URL" $Existing["POSTGRES_URL"] $true
+	VANTAGE_DASHBOARD_URL = Ask-Value "VANTAGE_DASHBOARD_URL" "Dashboard URL" $DefaultDashboardUrl
 	YOUTUBE_API_KEY = Ask-Value "YOUTUBE_API_KEY" "YouTube API key" $Existing["YOUTUBE_API_KEY"] $true
 	TWITCH_CLIENT_ID = Ask-Value "TWITCH_CLIENT_ID" "Twitch client ID" $Existing["TWITCH_CLIENT_ID"]
 	TWITCH_CLIENT_SECRET = Ask-Value "TWITCH_CLIENT_SECRET" "Twitch client secret" $Existing["TWITCH_CLIENT_SECRET"] $true
@@ -104,4 +106,5 @@ Require-Tool "yt-dlp"
 
 Write-Host "Wrote $EnvFile"
 Write-Host "Smoke test: npm.cmd run workers:local:once"
+Write-Host "Tray app: npm.cmd run workers:local:tray"
 Write-Host "Install on login: npm.cmd run workers:local:install"

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { EnsureAppDatabaseReady, Get, Run } from '../src/lib/server/db/app-db';
+import { ClaimNext } from './worker-claim';
 
 type ExportRow = {
 	Id: number;
@@ -60,14 +61,13 @@ async function RunWorker() {
 }
 
 async function NextExport() {
-	return await Get<ExportRow>(
-		`select clip_exports.id as "Id", media_job_id as "MediaJobId", clip_candidate_id as "ClipCandidateId", preset as "Preset"
-		 from clip_exports
-		 left join media_jobs on media_jobs.id = clip_exports.media_job_id
-		 where status in ('waiting', 'exporting')
-		 order by coalesce(media_jobs.priority, 0) desc, clip_exports.id asc
-		 limit 1`
-	);
+	return await ClaimNext<ExportRow>({
+		Table: 'clip_exports',
+		Select: `id as "Id", media_job_id as "MediaJobId", clip_candidate_id as "ClipCandidateId", preset as "Preset"`,
+		Where: `status in ('waiting', 'exporting')`,
+		OrderBy: 'id asc',
+		ClaimSeconds: 30 * 60
+	});
 }
 
 async function ProcessExport(Job: ExportRow) {

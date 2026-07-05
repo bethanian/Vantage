@@ -3,6 +3,7 @@ node_modules
 .vercel
 .codex
 build
+dist
 data
 .env
 .env.*
