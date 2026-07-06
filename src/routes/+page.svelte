@@ -459,6 +459,42 @@
 		return `${Job.MediaStatus || 'source media'} / ${Job.Progress}% / ${Job.EstimatedFileSize || 'size pending'}`;
 	}
 
+	function MediaJobActivity(Job: MediaJob) {
+		const Claim = ClaimLabel(Job.ClaimedBy, Job.ClaimExpiresAt);
+		const Prefix = Claim ? `${Claim} - ` : '';
+		const Updated = Job.UpdatedAt ? `Last update ${RelativeTime(Job.UpdatedAt)}.` : '';
+		const StageText: Record<string, string> = {
+			waiting: 'Waiting for the local worker to pick this up.',
+			'fetching source': 'Fetching source details and checking the link.',
+			downloading: 'Downloading media from the source.',
+			'recording livestream': 'Recording the live source.',
+			'extracting audio': 'Extracting audio for transcription.',
+			'retrieving transcript': 'Looking for an existing transcript.',
+			'generating transcript': 'Generating a transcript.',
+			'ready for review': 'Source media is ready for review.',
+			completed: 'Download is complete.',
+			paused: 'Download is paused.',
+			failed: Job.ErrorMessage ?? 'Download failed.',
+			'requires manual review': 'Manual source review is needed before download.'
+		};
+		return `${Prefix}${StageText[Job.Stage] ?? `Working on ${Job.Stage}.`} ${Updated}`.trim();
+	}
+
+	function MediaJobActive(Job: MediaJob) {
+		return !['completed', 'ready for review', 'failed', 'paused'].includes(Job.Stage);
+	}
+
+	function RelativeTime(Value: string) {
+		const Time = new Date(Value).getTime();
+		if (!Number.isFinite(Time)) return 'recently';
+		const Seconds = Math.max(0, Math.round((WorkerNow - Time) / 1000));
+		if (Seconds < 10) return 'just now';
+		if (Seconds < 60) return `${Seconds}s ago`;
+		const Minutes = Math.round(Seconds / 60);
+		if (Minutes < 60) return `${Minutes}m ago`;
+		return `${Math.round(Minutes / 60)}h ago`;
+	}
+
 	function TranscriptMatches(Text: string, Query: string) {
 		const Needle = Query.trim().toLowerCase();
 		if (!Needle) return 0;
@@ -1615,9 +1651,12 @@
 														<span>{ActiveEditorJob.Progress}%</span>
 													</div>
 													<div class="MediaJobProgressRow">
-														<div class="JobProgress"><span style={`width:${Math.max(0, Math.min(100, ActiveEditorJob.Progress))}%`}></span></div>
+														<div class:Active={MediaJobActive(ActiveEditorJob)} class="JobProgress">
+															<span style={`width:${Math.max(6, Math.min(100, ActiveEditorJob.Progress))}%`}></span>
+														</div>
 														<span>{ActiveEditorJob.Stage === 'waiting' ? 'queued' : `${ActiveEditorJob.Progress}%`}</span>
 													</div>
+													<div class="MediaJobActivity"><i class="ti ti-activity"></i>{MediaJobActivity(ActiveEditorJob)}</div>
 													{#if ActiveEditorJob.OutputPath}<div class="OutputPath"><i class="ti ti-folder"></i>{ActiveEditorJob.OutputPath}</div>{/if}
 													{#if ActiveEditorJob.ErrorMessage}<div class="JobError">{ActiveEditorJob.ErrorMessage}</div>{/if}
 												</div>
@@ -4473,16 +4512,92 @@
 	}
 
 	.JobProgress {
-		background: var(--RuleSoft);
+		background: color-mix(in srgb, var(--GreenSoft) 44%, var(--RuleSoft));
 		border-radius: 999px;
-		height: 6px;
+		box-shadow: inset 0 0 0 1px rgba(20, 96, 57, 0.08);
+		height: 10px;
 		overflow: hidden;
+		position: relative;
 	}
 
 	.JobProgress span {
-		background: var(--Green);
+		background:
+			linear-gradient(90deg, #1f6d43, #2f9360 48%, #74c892);
+		border-radius: inherit;
+		box-shadow: 0 0 16px rgba(47, 147, 96, 0.38);
 		display: block;
 		height: 100%;
+		min-width: 6%;
+		overflow: hidden;
+		position: relative;
+		transition: width 360ms ease;
+	}
+
+	.JobProgress.Active span::before,
+	.JobProgress.Active span::after {
+		animation: LiquidDrift 2.6s linear infinite;
+		background:
+			radial-gradient(circle at 22% 58%, rgba(255, 255, 255, 0.5) 0 12%, transparent 13%),
+			radial-gradient(circle at 68% 42%, rgba(255, 255, 255, 0.28) 0 10%, transparent 11%),
+			linear-gradient(115deg, transparent 0 18%, rgba(255, 255, 255, 0.22) 19% 30%, transparent 31% 48%, rgba(255, 255, 255, 0.16) 49% 58%, transparent 59%);
+		content: '';
+		inset: 0;
+		position: absolute;
+		width: 200%;
+	}
+
+	.JobProgress.Active span::after {
+		animation-direction: reverse;
+		animation-duration: 4.2s;
+		opacity: 0.58;
+	}
+
+	.JobProgress.Active::after {
+		animation: LiquidPulse 1.45s ease-in-out infinite;
+		background: rgba(255, 255, 255, 0.42);
+		border-radius: inherit;
+		content: '';
+		filter: blur(7px);
+		inset: 2px auto 2px 0;
+		position: absolute;
+		width: 24%;
+	}
+
+	.MediaJobActivity {
+		align-items: center;
+		color: var(--Ink2);
+		display: flex;
+		font-size: 12px;
+		gap: 6px;
+		line-height: 1.35;
+	}
+
+	.MediaJobActivity i {
+		color: var(--Green);
+		font-size: 14px;
+	}
+
+	@keyframes LiquidDrift {
+		from {
+			transform: translateX(-50%);
+		}
+		to {
+			transform: translateX(0);
+		}
+	}
+
+	@keyframes LiquidPulse {
+		0% {
+			opacity: 0.12;
+			transform: translateX(-20%);
+		}
+		50% {
+			opacity: 0.32;
+		}
+		100% {
+			opacity: 0.12;
+			transform: translateX(320%);
+		}
 	}
 
 	.JobError {
