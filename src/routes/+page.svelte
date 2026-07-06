@@ -209,7 +209,6 @@
 	let ShowEditorAdvanced = $state(false);
 	let IsSidebarOpen = $state(false);
 	let WorkerNow = $state(Date.now());
-	let NextJobRefreshAt = $state(Date.now() + 30_000);
 	let WorkerRefreshFailed = $state(false);
 	let AudioContextInstance: AudioContext | null = null;
 	let LastSoundAt = 0;
@@ -254,7 +253,6 @@
 	});
 
 	async function RefreshJobData() {
-		NextJobRefreshAt = Date.now() + 30_000;
 		await invalidateAll();
 	}
 
@@ -481,8 +479,7 @@
 	function MediaJobActivity(Job: MediaJob) {
 		const Claim = ClaimLabel(Job.ClaimedBy, Job.ClaimExpiresAt);
 		const Prefix = Claim ? `${Claim} - ` : '';
-		const Updated = Job.UpdatedAt ? `Last update ${RelativeTime(Job.UpdatedAt)}.` : 'Last update pending.';
-		const Refresh = `Updating in ${NextJobRefreshSeconds()}s.`;
+		const Activity = MediaJobDownloadActivity(Job);
 		const StageText: Record<string, string> = {
 			waiting: 'Waiting for the local worker to pick this up.',
 			'fetching source': 'Fetching source details and checking the link.',
@@ -497,26 +494,14 @@
 			failed: Job.ErrorMessage ?? 'Download failed.',
 			'requires manual review': 'Manual source review is needed before download.'
 		};
-		return `${Prefix}${StageText[Job.Stage] ?? `Working on ${Job.Stage}.`} ${Updated} ${Refresh}`.trim();
+		if (Activity && ['fetching source', 'downloading', 'recording livestream'].includes(Job.Stage)) {
+			return `${Prefix}${MediaJobActivityText(Activity)}`;
+		}
+		return `${Prefix}${StageText[Job.Stage] ?? `Working on ${Job.Stage}.`}`.trim();
 	}
 
 	function MediaJobActive(Job: MediaJob) {
 		return !['completed', 'ready for review', 'failed', 'paused'].includes(Job.Stage);
-	}
-
-	function RelativeTime(Value: string) {
-		const Time = new Date(Value).getTime();
-		if (!Number.isFinite(Time)) return 'recently';
-		const Seconds = Math.max(0, Math.round((WorkerNow - Time) / 1000));
-		if (Seconds < 10) return 'just now';
-		if (Seconds < 60) return `${Seconds}s ago`;
-		const Minutes = Math.round(Seconds / 60);
-		if (Minutes < 60) return `${Minutes}m ago`;
-		return `${Math.round(Minutes / 60)}h ago`;
-	}
-
-	function NextJobRefreshSeconds() {
-		return Math.max(0, Math.ceil((NextJobRefreshAt - WorkerNow) / 1000));
 	}
 
 	function TranscriptMatches(Text: string, Query: string) {
@@ -624,10 +609,34 @@
 	}
 
 	function LiveChunkAnalysis(Job: MediaJob) {
+		return ParseJobMetadata<{ LiveChunkAnalysis?: { ProcessedMomentKeys?: string[]; LastChunkIndex?: number; UpdatedAt?: string } }>(Job)?.LiveChunkAnalysis ?? null;
+	}
+
+	type DownloadActivity = {
+		Label?: string;
+		Detail?: string;
+		FileName?: string;
+		FileSize?: string;
+		UpdatedAt?: string;
+	};
+
+	function MediaJobDownloadActivity(Job: MediaJob) {
+		return ParseJobMetadata<{ DownloadActivity?: DownloadActivity }>(Job)?.DownloadActivity ?? null;
+	}
+
+	function MediaJobActivityText(Activity: DownloadActivity) {
+		const Label = Activity.Label || 'Working on media';
+		const File = Activity.FileName ? `${Activity.FileName}${Activity.FileSize ? ` (${Activity.FileSize})` : ''}` : '';
+		if (Activity.Detail && File) return `${Label}: ${Activity.Detail} - ${File}`;
+		if (Activity.Detail) return `${Label}: ${Activity.Detail}`;
+		if (File) return `${Label}: ${File}`;
+		return Label;
+	}
+
+	function ParseJobMetadata<T>(Job: MediaJob) {
 		if (!Job.MetadataJson) return null;
 		try {
-			const Parsed = JSON.parse(Job.MetadataJson) as { LiveChunkAnalysis?: { ProcessedMomentKeys?: string[]; LastChunkIndex?: number; UpdatedAt?: string } };
-			return Parsed.LiveChunkAnalysis ?? null;
+			return JSON.parse(Job.MetadataJson) as T;
 		} catch {
 			return null;
 		}

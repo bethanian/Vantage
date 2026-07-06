@@ -34,6 +34,19 @@ type YtDlpMetadata = {
 	ext?: string;
 };
 
+type DownloadActivity = {
+	Label: string;
+	Detail?: string;
+	FileName?: string;
+	FileSize?: string;
+	UpdatedAt: string;
+};
+
+type JobMetadata = YtDlpMetadata & {
+	DownloadActivity?: DownloadActivity;
+	[Key: string]: unknown;
+};
+
 const MediaClaimSeconds = Number(process.env.VANTAGE_MEDIA_CLAIM_SECONDS ?? 180);
 
 class WorkerStoppedError extends Error {
@@ -141,15 +154,28 @@ async function ProcessJob(Job: MediaJobRow) {
 		EstimatedFileSize: Bytes(Metadata.filesize ?? Metadata.filesize_approx),
 		MetadataJson: JSON.stringify(Metadata)
 	});
+	await UpdateDownloadActivity(Job.Id, Metadata, Stage, 'Preparing download files.');
 
+	let LastActivityWriteAt = 0;
+	let LastProgress = 10;
 	await RunCommand(
 		'yt-dlp',
 		Args,
 		LogPath,
 		async (Line) => {
 			const Percent = ProgressPercent(Line);
-			if (Percent === null) return;
-			await UpdateJob(Job.Id, { Progress: Math.max(10, Math.min(98, Percent)), Stage });
+			const Progress = Percent === null ? null : Math.max(10, Math.min(98, Percent));
+			const ShouldWriteActivity =
+				Date.now() - LastActivityWriteAt > 5000 ||
+				(Progress !== null && Math.floor(Progress) !== Math.floor(LastProgress));
+			if (Progress === null && !ShouldWriteActivity) return;
+			const Activity = DownloadActivityForJob(Job.Id, Stage, Line);
+			const Patch = Progress === null
+				? { Stage, MetadataJson: JSON.stringify({ ...Metadata, DownloadActivity: Activity }) }
+				: { Progress, Stage, MetadataJson: JSON.stringify({ ...Metadata, DownloadActivity: Activity }) };
+			await UpdateJob(Job.Id, Patch);
+			LastActivityWriteAt = Date.now();
+			if (Progress !== null) LastProgress = Progress;
 		},
 		() => StopReason(Job.Id)
 	);
@@ -161,7 +187,11 @@ async function ProcessJob(Job: MediaJobRow) {
 		Progress: 98,
 		OutputPath,
 		EstimatedFileSize: Size,
-		DownloadedAt: new Date().toISOString()
+		DownloadedAt: new Date().toISOString(),
+		MetadataJson: JSON.stringify({
+			...Metadata,
+			DownloadActivity: DownloadActivityForJob(Job.Id, 'extracting audio', 'Download finished.')
+		})
 	});
 	await UpdateJob(Job.Id, {
 		Stage: 'retrieving transcript',
@@ -210,6 +240,8 @@ async function RunCommand(
 		const Text = String(Chunk);
 		Log.write(Text);
 		ErrorBuffer += Text;
+		const Lines = Text.split(/\r?\n/).filter(Boolean);
+		for (const Line of Lines) void OnLine(Line);
 	});
 
 	const CancelTimer = ShouldStop
@@ -308,6 +340,96 @@ async function StopReason(Id: number) {
 	if (Row?.CancelledAt) return 'cancelled';
 	if (Row?.Stage === 'paused') return 'paused';
 	return false;
+}
+
+async function UpdateDownloadActivity(Id: number, Metadata: JobMetadata, Stage: string, Detail?: string) {
+	await UpdateJob(Id, {
+		Stage,
+		MetadataJson: JSON.stringify({
+			...Metadata,
+			DownloadActivity: DownloadActivityForJob(Id, Stage, Detail)
+		})
+	});
+}
+
+function DownloadActivityForJob(JobId: number, Stage: string, Line?: string): DownloadActivity {
+	const Files = DownloadFiles(JobId);
+	const Recent = Files[0];
+	const Fragment = Files.find((File) => /\.part-Frag\d+\.part$/i.test(File.Name));
+	const Partial = Files.find((File) => /\.part$/i.test(File.Name) && !/\.part-Frag\d+\.part$/i.test(File.Name));
+	const Final = Files.find((File) => IsFinalMediaFile(File.Name));
+	const Info = Files.find((File) => /\.info\.json$/i.test(File.Name));
+	const Thumbnail = Files.find((File) => /\.(jpe?g|png|webp)$/i.test(File.Name));
+	const Session = Files.find((File) => /\.ytdl$/i.test(File.Name));
+	const NormalizedLine = Line?.trim() ?? '';
+	const LineLabel = DownloadLineLabel(NormalizedLine);
+
+	if (Final) return Activity('Finalizing downloaded file', LineLabel ?? 'Preparing it for the next step.', Final);
+	if (Fragment) return Activity('Downloading fragments', LineLabel ?? 'Saving a new video segment.', Fragment);
+	if (Partial) return Activity(Stage === 'recording livestream' ? 'Recording live media' : 'Writing video file', LineLabel ?? 'Saving the main media file.', Partial);
+	if (Session) return Activity('Saving download session', LineLabel ?? 'Keeping the download resumable.', Session);
+	if (Thumbnail) return Activity('Fetched thumbnail', LineLabel ?? 'Saving preview artwork.', Thumbnail);
+	if (Info) return Activity('Fetched source details', LineLabel ?? 'Saving source metadata.', Info);
+	return Activity(LineLabel ?? StageLabel(Stage), NormalizedLine && !LineLabel ? CleanDownloadLine(NormalizedLine) : undefined, Recent);
+}
+
+function DownloadFiles(JobId: number) {
+	if (!existsSync(DownloadRoot)) return [] as Array<{ Name: string; Path: string; Size: number; MtimeMs: number }>;
+	const Prefix = `job-${JobId}.`;
+	return readdirSync(DownloadRoot)
+		.filter((Name) => Name.startsWith(Prefix))
+		.map((Name) => {
+			const Path = join(DownloadRoot, Name);
+			const Stats = statSync(Path);
+			return { Name, Path, Size: Stats.size, MtimeMs: Stats.mtimeMs };
+		})
+		.sort((A, B) => B.MtimeMs - A.MtimeMs);
+}
+
+function DownloadLineLabel(Line: string) {
+	if (!Line) return null;
+	if (/Destination:/i.test(Line)) return 'Opening the destination file.';
+	if (/Merging formats/i.test(Line)) return 'Merging media tracks.';
+	if (/Deleting original file/i.test(Line)) return 'Cleaning up temporary pieces.';
+	if (/Writing video metadata/i.test(Line)) return 'Writing video metadata.';
+	if (/Downloading thumbnail/i.test(Line)) return 'Downloading thumbnail.';
+	if (/has already been downloaded/i.test(Line)) return 'Using an existing downloaded file.';
+	if (/fragment/i.test(Line)) return CleanDownloadLine(Line);
+	return null;
+}
+
+function StageLabel(Stage: string) {
+	const Labels: Record<string, string> = {
+		'fetching source': 'Fetching source details',
+		downloading: 'Downloading media',
+		'recording livestream': 'Recording live media',
+		'extracting audio': 'Preparing audio'
+	};
+	return Labels[Stage] ?? `Working on ${Stage}`;
+}
+
+function Activity(Label: string, Detail?: string, File?: { Name: string; Size: number }): DownloadActivity {
+	return {
+		Label,
+		Detail,
+		FileName: File?.Name,
+		FileSize: File ? Bytes(File.Size) : undefined,
+		UpdatedAt: new Date().toISOString()
+	};
+}
+
+function CleanDownloadLine(Line: string) {
+	return Line
+		.replace(/^\[[^\]]+\]\s*/, '')
+		.replace(/\s+/g, ' ')
+		.trim()
+		.slice(0, 120);
+}
+
+function IsFinalMediaFile(Name: string) {
+	if (!Name.startsWith('job-')) return false;
+	if (/\.(info\.json|jpe?g|png|webp|part|ytdl)$/i.test(Name)) return false;
+	return /\.(mp4|mkv|webm|mov|m4a|mp3|aac|wav)$/i.test(Name);
 }
 
 function FindDownloadedFile(JobId: number) {
