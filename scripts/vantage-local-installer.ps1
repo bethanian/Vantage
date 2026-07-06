@@ -22,6 +22,27 @@ function Refresh-Path {
 	$env:Path = "$MachinePath;$UserPath"
 }
 
+function Invoke-External {
+	param(
+		[string]$FilePath,
+		[string[]]$Arguments,
+		[string]$Label
+	)
+
+	$PreviousPreference = $ErrorActionPreference
+	$ErrorActionPreference = "Continue"
+	try {
+		& $FilePath @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+		$ExitCode = $LASTEXITCODE
+	} finally {
+		$ErrorActionPreference = $PreviousPreference
+	}
+
+	if ($ExitCode) {
+		throw "$Label failed with exit code $ExitCode."
+	}
+}
+
 function Install-Tool {
 	param(
 		[string]$Command,
@@ -40,8 +61,9 @@ function Install-Tool {
 	}
 
 	Write-Host "Installing $Label..."
-	winget install --id $PackageId --exact --accept-source-agreements --accept-package-agreements
-	if ($LASTEXITCODE) {
+	try {
+		Invoke-External "winget" @("install", "--id", $PackageId, "--exact", "--accept-source-agreements", "--accept-package-agreements") "Install $Label"
+	} catch {
 		Write-Warning "Could not install $Label automatically. Install it manually, then run this installer again."
 		return
 	}
@@ -105,25 +127,25 @@ New-Item -ItemType Directory -Force -Path $InstallParent | Out-Null
 
 if (Test-Path (Join-Path $InstallDir ".git")) {
 	Write-Host "Updating Vantage..."
-	git -C $InstallDir fetch --all --prune
-	if ($LASTEXITCODE) { exit $LASTEXITCODE }
-	git -C $InstallDir checkout $Branch
-	if ($LASTEXITCODE) { exit $LASTEXITCODE }
-	git -C $InstallDir pull --ff-only
-	if ($LASTEXITCODE) { exit $LASTEXITCODE }
+	Invoke-External "git" @("-C", $InstallDir, "fetch", "--all", "--prune") "Git fetch"
+	$CurrentBranch = (& git -C $InstallDir branch --show-current).Trim()
+	if ($CurrentBranch -ne $Branch) {
+		Invoke-External "git" @("-C", $InstallDir, "checkout", $Branch) "Git checkout"
+	} else {
+		Write-Host "Already on $Branch"
+	}
+	Invoke-External "git" @("-C", $InstallDir, "pull", "--ff-only") "Git pull"
 } elseif (Test-Path $InstallDir) {
 	throw "Install folder already exists but is not a Vantage checkout: $InstallDir"
 } else {
 	Write-Host "Downloading Vantage..."
-	git clone --branch $Branch $RepoUrl $InstallDir
-	if ($LASTEXITCODE) { exit $LASTEXITCODE }
+	Invoke-External "git" @("clone", "--branch", $Branch, $RepoUrl, $InstallDir) "Git clone"
 }
 
 Set-Location $InstallDir
 
 Write-Host "Installing app packages..."
-npm.cmd install
-if ($LASTEXITCODE) { exit $LASTEXITCODE }
+Invoke-External "npm.cmd" @("install") "npm install"
 
 Write-SeedEnv -Path ".env.local" -Dashboard $DashboardUrl -Postgres $PostgresUrl
 
