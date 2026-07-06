@@ -4,7 +4,7 @@ param(
 	[string]$Workers = "sync,source,social,media,live,signals,transcript,translation,chat,analysis,caption,preview,export"
 )
 
-$Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Launcher = Join-Path $Root "scripts\start-local-workers.ps1"
 $QuotedLauncher = '"' + $Launcher + '"'
 $QuotedEnvFile = '"' + $EnvFile + '"'
