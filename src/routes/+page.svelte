@@ -1604,14 +1604,20 @@
 													{/if}
 												</div>
 												<div class="MediaJobBody">
-													<div class="MediaJobTop"><span>{ActiveEditorJob.SourcePlatform}</span><strong>{ActiveEditorJob.VideoTitle}</strong></div>
+													<div class="MediaJobTop">
+														<span>{ActiveEditorJob.SourcePlatform}</span>
+														<strong>{ActiveEditorJob.VideoTitle}</strong>
+													</div>
 													<div class="MediaJobMeta">
 														<span>{ActiveEditorJob.Creator}</span>
 														<span>{ActiveEditorJob.Duration}</span>
 														<span>{ActiveEditorJob.Stage}</span>
 														<span>{ActiveEditorJob.Progress}%</span>
 													</div>
-													<div class="JobProgress"><span style={`width:${Math.max(0, Math.min(100, ActiveEditorJob.Progress))}%`}></span></div>
+													<div class="MediaJobProgressRow">
+														<div class="JobProgress"><span style={`width:${Math.max(0, Math.min(100, ActiveEditorJob.Progress))}%`}></span></div>
+														<span>{ActiveEditorJob.Stage === 'waiting' ? 'queued' : `${ActiveEditorJob.Progress}%`}</span>
+													</div>
 													{#if ActiveEditorJob.OutputPath}<div class="OutputPath"><i class="ti ti-folder"></i>{ActiveEditorJob.OutputPath}</div>{/if}
 													{#if ActiveEditorJob.ErrorMessage}<div class="JobError">{ActiveEditorJob.ErrorMessage}</div>{/if}
 												</div>
@@ -4362,9 +4368,9 @@
 		border-left: 4px solid var(--Ink3);
 		border-radius: 8px;
 		display: grid;
-		gap: 12px;
-		grid-template-columns: 116px minmax(0, 1fr) auto;
-		padding: 10px;
+		gap: 14px;
+		grid-template-columns: 168px minmax(0, 1fr) 92px;
+		padding: 12px;
 	}
 
 	.MediaJobCard.requires-manual-review {
@@ -4388,8 +4394,10 @@
 		color: var(--Ink3);
 		display: grid;
 		font-size: 24px;
+		height: 94px;
 		overflow: hidden;
 		place-items: center;
+		width: 168px;
 	}
 
 	.MediaJobMedia img {
@@ -4399,8 +4407,9 @@
 	}
 
 	.MediaJobBody {
+		align-content: start;
 		display: grid;
-		gap: 7px;
+		gap: 8px;
 		min-width: 0;
 	}
 
@@ -4418,7 +4427,14 @@
 	}
 
 	.MediaJobTop strong {
+		-webkit-box-orient: vertical;
+		display: -webkit-box;
 		font-size: 13px;
+		line-height: 1.25;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		max-width: 100%;
+		overflow: hidden;
 		overflow-wrap: anywhere;
 	}
 
@@ -4426,7 +4442,34 @@
 	.MediaJobStage {
 		display: flex;
 		flex-wrap: wrap;
+		gap: 5px;
+	}
+
+	.MediaJobMeta span {
+		background: var(--Surface);
+		border: 1px solid var(--RuleSoft);
+		border-radius: 999px;
+		line-height: 1;
+		max-width: 100%;
+		overflow: hidden;
+		padding: 4px 6px;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.MediaJobProgressRow {
+		align-items: center;
+		display: grid;
 		gap: 8px;
+		grid-template-columns: minmax(0, 1fr) auto;
+		min-width: 0;
+	}
+
+	.MediaJobProgressRow > span {
+		color: var(--Ink3);
+		font-size: 10px;
+		text-transform: uppercase;
+		white-space: nowrap;
 	}
 
 	.JobProgress {
@@ -4570,7 +4613,7 @@
 		align-content: start;
 		display: grid;
 		gap: 6px;
-		min-width: 92px;
+		min-width: 0;
 	}
 
 	.MediaJobActions button {
@@ -6529,6 +6572,11 @@
 
 		.MediaJobCard {
 			grid-template-columns: 1fr;
+		}
+
+		.MediaJobMedia {
+			height: auto;
+			width: min(100%, 260px);
 		}
 
 		.MediaJobActions {
