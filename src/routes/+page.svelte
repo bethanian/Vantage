@@ -620,6 +620,34 @@
 		UpdatedAt?: string;
 	};
 
+	type SmartChunk = {
+		Index: number;
+		Start: number;
+		End: number;
+		Duration: number;
+		Path: string;
+		Status: 'ready' | 'failed';
+		Label: string;
+	};
+
+	type SmartChunkPlan = {
+		Status?: 'skipped' | 'ready' | 'failed';
+		Reason?: string;
+		TotalDuration?: number;
+		ChunkSeconds?: number;
+		OverlapSeconds?: number;
+		Chunks?: SmartChunk[];
+	};
+
+	type ChunkTranscriptStatus = {
+		Status?: string;
+		CurrentIndex?: number;
+		CurrentLabel?: string;
+		Done?: number;
+		Total?: number;
+		Chunks?: Array<{ Index: number; Label: string; Status: string; SegmentCount?: number; Error?: string }>;
+	};
+
 	function MediaJobDownloadActivity(Job: MediaJob) {
 		return ParseJobMetadata<{ DownloadActivity?: DownloadActivity }>(Job)?.DownloadActivity ?? null;
 	}
@@ -640,6 +668,39 @@
 		} catch {
 			return null;
 		}
+	}
+
+	function SmartChunkPlan(Job: MediaJob) {
+		return ParseJobMetadata<{ SmartChunks?: SmartChunkPlan }>(Job)?.SmartChunks ?? null;
+	}
+
+	function ChunkTranscript(Job: MediaJob) {
+		return ParseJobMetadata<{ ChunkTranscript?: ChunkTranscriptStatus }>(Job)?.ChunkTranscript ?? null;
+	}
+
+	function SmartChunkSummary(Job: MediaJob) {
+		const Plan = SmartChunkPlan(Job);
+		if (!Plan) return '';
+		if (Plan.Status === 'skipped') return Plan.Reason || 'Chunking was not needed for this source.';
+		const Chunks = Plan.Chunks?.filter((Chunk) => Chunk.Status === 'ready') ?? [];
+		if (!Chunks.length) return Plan.Reason || 'No ready chunks yet.';
+		const Transcript = ChunkTranscript(Job);
+		if (Transcript?.Total) return `${Transcript.Done ?? 0}/${Transcript.Total} chunks transcribed${Transcript.CurrentLabel ? ` - now on ${Transcript.CurrentLabel}` : ''}`;
+		return `${Chunks.length} smart chunks ready${Plan.ChunkSeconds ? ` / ${Math.round(Plan.ChunkSeconds / 60)} min each` : ''}`;
+	}
+
+	function ShowSmartChunks(Job: MediaJob) {
+		const Plan = SmartChunkPlan(Job);
+		return Boolean(Plan && Plan.Status !== 'skipped');
+	}
+
+	function ChunkStatusClass(Job: MediaJob, Chunk: SmartChunk) {
+		const Transcript = ChunkTranscript(Job);
+		const Status = Transcript?.Chunks?.find((Item) => Item.Index === Chunk.Index)?.Status;
+		if (Status === 'done') return 'Done';
+		if (Status === 'failed' || Chunk.Status === 'failed') return 'Failed';
+		if (Transcript?.CurrentIndex === Chunk.Index) return 'Active';
+		return '';
 	}
 
 	function ParseAnalysisReport(Raw?: string | null) {
@@ -1706,6 +1767,21 @@
 														<span>{ActiveEditorJob.Stage === 'waiting' ? 'queued' : `${ActiveEditorJob.Progress}%`}</span>
 													</div>
 													<div class="MediaJobActivity"><i class="ti ti-activity"></i>{MediaJobActivity(ActiveEditorJob)}</div>
+													{#if ShowSmartChunks(ActiveEditorJob)}
+														<div class="SmartChunkPanel">
+															<div class="SmartChunkHead">
+																<span><i class="ti ti-stack-2"></i>smart chunks</span>
+																<strong>{SmartChunkSummary(ActiveEditorJob)}</strong>
+															</div>
+															{#if SmartChunkPlan(ActiveEditorJob)?.Chunks?.length}
+																<div class="SmartChunkStrip">
+																	{#each SmartChunkPlan(ActiveEditorJob)?.Chunks?.slice(0, 36) ?? [] as Chunk}
+																		<span class={ChunkStatusClass(ActiveEditorJob, Chunk)} title={Chunk.Label}></span>
+																	{/each}
+																</div>
+															{/if}
+														</div>
+													{/if}
 													{#if ActiveEditorJob.OutputPath}<div class="OutputPath"><i class="ti ti-folder"></i>{ActiveEditorJob.OutputPath}</div>{/if}
 													{#if ActiveEditorJob.ErrorMessage}<div class="JobError">{ActiveEditorJob.ErrorMessage}</div>{/if}
 												</div>
@@ -4619,6 +4695,73 @@
 	.MediaJobActivity i {
 		color: var(--Green);
 		font-size: 14px;
+	}
+
+	.SmartChunkPanel {
+		background: rgba(255, 255, 255, 0.48);
+		border: 1px solid var(--RuleSoft);
+		border-radius: 6px;
+		display: grid;
+		gap: 8px;
+		padding: 8px;
+	}
+
+	.SmartChunkHead {
+		align-items: start;
+		display: grid;
+		gap: 4px;
+		grid-template-columns: auto minmax(0, 1fr);
+	}
+
+	.SmartChunkHead span {
+		align-items: center;
+		color: var(--Green);
+		display: inline-flex;
+		font-size: 10px;
+		font-weight: 700;
+		gap: 5px;
+		text-transform: uppercase;
+		white-space: nowrap;
+	}
+
+	.SmartChunkHead strong {
+		color: var(--Ink2);
+		font-size: 11px;
+		font-weight: 600;
+		line-height: 1.35;
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+
+	.SmartChunkStrip {
+		display: grid;
+		gap: 3px;
+		grid-template-columns: repeat(auto-fit, minmax(14px, 1fr));
+		max-width: 100%;
+	}
+
+	.SmartChunkStrip span {
+		background: var(--Surface);
+		border: 1px solid var(--RuleSoft);
+		border-radius: 999px;
+		height: 7px;
+		min-width: 0;
+	}
+
+	.SmartChunkStrip span.Active {
+		background: var(--GreenSoft);
+		border-color: #8db79c;
+		box-shadow: 0 0 10px rgba(47, 104, 66, 0.18);
+	}
+
+	.SmartChunkStrip span.Done {
+		background: var(--Green);
+		border-color: var(--Green);
+	}
+
+	.SmartChunkStrip span.Failed {
+		background: #f4d8d2;
+		border-color: #d78d80;
 	}
 
 	@keyframes GlassProgressSweep {

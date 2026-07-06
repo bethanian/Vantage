@@ -44,7 +44,30 @@ type DownloadActivity = {
 
 type JobMetadata = YtDlpMetadata & {
 	DownloadActivity?: DownloadActivity;
+	SmartChunks?: SmartChunkPlan;
 	[Key: string]: unknown;
+};
+
+type SmartChunk = {
+	Index: number;
+	Start: number;
+	End: number;
+	Duration: number;
+	Path: string;
+	Status: 'ready' | 'failed';
+	Label: string;
+};
+
+type SmartChunkPlan = {
+	Version: number;
+	Status: 'skipped' | 'ready' | 'failed';
+	GeneratedAt: string;
+	Reason?: string;
+	SourcePath?: string;
+	TotalDuration?: number;
+	ChunkSeconds?: number;
+	OverlapSeconds?: number;
+	Chunks: SmartChunk[];
 };
 
 const MediaClaimSeconds = Number(process.env.VANTAGE_MEDIA_CLAIM_SECONDS ?? 180);
@@ -62,11 +85,14 @@ const RunOnce = process.argv.includes('--once');
 const PollMs = Number(process.env.VANTAGE_MEDIA_WORKER_POLL_MS ?? 5000);
 const DownloadRoot = resolve(process.env.VANTAGE_DOWNLOAD_DIR ?? process.env.VANTAGE_MEDIA_DIR ?? 'media/downloads');
 const LogRoot = resolve(process.env.VANTAGE_MEDIA_LOG_DIR ?? 'media/logs');
+const ChunkRoot = resolve(process.env.VANTAGE_MEDIA_CHUNK_DIR ?? 'media/chunks');
 const MaxLiveSeconds = Number(process.env.VANTAGE_MAX_LIVE_RECORD_SECONDS ?? 7200);
+const SmartChunkMinSeconds = Number(process.env.VANTAGE_SMART_CHUNK_MIN_SECONDS ?? 3600);
 
 await EnsureAppDatabaseReady();
 mkdirSync(DownloadRoot, { recursive: true });
 mkdirSync(LogRoot, { recursive: true });
+mkdirSync(ChunkRoot, { recursive: true });
 
 await RunWorker();
 
@@ -182,6 +208,8 @@ async function ProcessJob(Job: MediaJobRow) {
 
 	const OutputPath = FindDownloadedFile(Job.Id);
 	const Size = OutputPath ? Bytes(statSync(OutputPath).size) : 'unknown';
+	const SmartChunks = OutputPath ? await BuildSmartChunkPlan(Job.Id, OutputPath, Metadata.duration) : SkippedChunkPlan('No downloaded source file was available for chunking.');
+	const FinalMetadata = { ...Metadata, SmartChunks };
 	await UpdateJob(Job.Id, {
 		Stage: 'extracting audio',
 		Progress: 98,
@@ -189,7 +217,7 @@ async function ProcessJob(Job: MediaJobRow) {
 		EstimatedFileSize: Size,
 		DownloadedAt: new Date().toISOString(),
 		MetadataJson: JSON.stringify({
-			...Metadata,
+			...FinalMetadata,
 			DownloadActivity: DownloadActivityForJob(Job.Id, 'extracting audio', 'Download finished.')
 		})
 	});
@@ -352,6 +380,121 @@ async function UpdateDownloadActivity(Id: number, Metadata: JobMetadata, Stage: 
 	});
 }
 
+async function BuildSmartChunkPlan(JobId: number, OutputPath: string, KnownDuration?: number): Promise<SmartChunkPlan> {
+	const TotalDuration = KnownDuration && Number.isFinite(KnownDuration) ? KnownDuration : await ProbeDuration(OutputPath).catch(() => 0);
+	if (!TotalDuration || TotalDuration < SmartChunkMinSeconds) {
+		return SkippedChunkPlan(`Source is shorter than ${Math.round(SmartChunkMinSeconds / 60)} minutes.`, OutputPath, TotalDuration);
+	}
+
+	const ChunkSeconds = SmartChunkSeconds(TotalDuration);
+	const OverlapSeconds = Number(process.env.VANTAGE_SMART_CHUNK_OVERLAP_SECONDS ?? 5);
+	const ChunkDir = join(ChunkRoot, `job-${JobId}`);
+	mkdirSync(ChunkDir, { recursive: true });
+	try {
+		await EnsureFfmpegForChunks();
+	} catch (Reason) {
+		return {
+			Version: 1,
+			Status: 'failed',
+			GeneratedAt: new Date().toISOString(),
+			Reason: Reason instanceof Error ? Reason.message : 'ffmpeg was not available for chunking.',
+			SourcePath: OutputPath,
+			TotalDuration,
+			ChunkSeconds,
+			OverlapSeconds,
+			Chunks: []
+		};
+	}
+
+	const Chunks: SmartChunk[] = [];
+	let Index = 1;
+	for (let Start = 0; Start < TotalDuration; Start += ChunkSeconds) {
+		const ChunkStart = Math.max(0, Start - (Start > 0 ? OverlapSeconds : 0));
+		const End = Math.min(TotalDuration, Start + ChunkSeconds);
+		const Path = join(ChunkDir, `chunk-${String(Index).padStart(3, '0')}.mp4`);
+		try {
+			if (!existsSync(Path)) {
+				await RunCommandCapture('ffmpeg', [
+					'-y',
+					'-ss',
+					String(ChunkStart),
+					'-t',
+					String(End - ChunkStart),
+					'-i',
+					OutputPath,
+					'-c',
+					'copy',
+					'-avoid_negative_ts',
+					'make_zero',
+					Path
+				]);
+			}
+			Chunks.push({
+				Index,
+				Start: ChunkStart,
+				End,
+				Duration: End - ChunkStart,
+				Path,
+				Status: 'ready',
+				Label: `${FormatTimestamp(ChunkStart)} - ${FormatTimestamp(End)}`
+			});
+		} catch {
+			Chunks.push({
+				Index,
+				Start: ChunkStart,
+				End,
+				Duration: End - ChunkStart,
+				Path,
+				Status: 'failed',
+				Label: `${FormatTimestamp(ChunkStart)} - ${FormatTimestamp(End)}`
+			});
+		}
+		Index += 1;
+	}
+
+	const Ready = Chunks.filter((Chunk) => Chunk.Status === 'ready');
+	return {
+		Version: 1,
+		Status: Ready.length ? 'ready' : 'failed',
+		GeneratedAt: new Date().toISOString(),
+		Reason: Ready.length ? `Split into ${Ready.length} local processing chunks.` : 'Chunk files could not be created.',
+		SourcePath: OutputPath,
+		TotalDuration,
+		ChunkSeconds,
+		OverlapSeconds,
+		Chunks
+	};
+}
+
+function SkippedChunkPlan(Reason: string, SourcePath?: string, TotalDuration?: number): SmartChunkPlan {
+	return {
+		Version: 1,
+		Status: 'skipped',
+		GeneratedAt: new Date().toISOString(),
+		Reason,
+		SourcePath,
+		TotalDuration,
+		Chunks: []
+	};
+}
+
+function SmartChunkSeconds(Duration: number) {
+	if (Duration <= 3600) return 10 * 60;
+	if (Duration <= 4 * 3600) return 15 * 60;
+	return 20 * 60;
+}
+
+async function ProbeDuration(OutputPath: string) {
+	const Output = await RunCommandCapture('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', OutputPath]);
+	const Duration = Number(Output.trim());
+	return Number.isFinite(Duration) ? Duration : 0;
+}
+
+async function EnsureFfmpegForChunks() {
+	await RunCommandCapture('ffmpeg', ['-version']);
+	await RunCommandCapture('ffprobe', ['-version']);
+}
+
 function DownloadActivityForJob(JobId: number, Stage: string, Line?: string): DownloadActivity {
 	const Files = DownloadFiles(JobId);
 	const Recent = Files[0];
@@ -471,6 +614,14 @@ function SecondsToDuration(Seconds?: number) {
 	const Hours = Math.floor(Seconds / 3600);
 	const Minutes = Math.floor((Seconds % 3600) / 60);
 	const Remaining = Math.floor(Seconds % 60);
+	return Hours ? `${Hours}:${String(Minutes).padStart(2, '0')}:${String(Remaining).padStart(2, '0')}` : `${Minutes}:${String(Remaining).padStart(2, '0')}`;
+}
+
+function FormatTimestamp(Seconds: number) {
+	const Safe = Math.max(0, Math.floor(Seconds));
+	const Hours = Math.floor(Safe / 3600);
+	const Minutes = Math.floor((Safe % 3600) / 60);
+	const Remaining = Safe % 60;
 	return Hours ? `${Hours}:${String(Minutes).padStart(2, '0')}:${String(Remaining).padStart(2, '0')}` : `${Minutes}:${String(Remaining).padStart(2, '0')}`;
 }
 

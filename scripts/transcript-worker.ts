@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { basename, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { EnsureAppDatabaseReady, Get, Run } from '../src/lib/server/db/app-db';
-import { ClaimNext } from './worker-claim';
+import { ClaimNext, WorkerInstanceId } from './worker-claim';
 
 type MediaJobRow = {
 	Id: number;
@@ -39,9 +39,26 @@ type EnrichmentResult = {
 	Error?: string;
 };
 
+type SmartChunk = {
+	Index: number;
+	Start: number;
+	End: number;
+	Duration: number;
+	Path: string;
+	Status: 'ready' | 'failed';
+	Label: string;
+};
+
+type SmartChunkPlan = {
+	Status?: 'skipped' | 'ready' | 'failed';
+	Reason?: string;
+	Chunks?: SmartChunk[];
+};
+
 const RunOnce = process.argv.includes('--once');
 const PollMs = Number(process.env.VANTAGE_TRANSCRIPT_WORKER_POLL_MS ?? 5000);
 const TranscriptRoot = resolve(process.env.VANTAGE_TRANSCRIPT_DIR ?? 'media/transcripts');
+const TranscriptClaimSeconds = Number(process.env.VANTAGE_TRANSCRIPT_CLAIM_SECONDS ?? 20 * 60);
 
 await EnsureAppDatabaseReady();
 mkdirSync(TranscriptRoot, { recursive: true });
@@ -79,7 +96,7 @@ async function NextJob() {
 		   and transcript_text is null
 		   and cancelled_at is null`,
 		OrderBy: 'priority desc, id asc',
-		ClaimSeconds: 20 * 60
+		ClaimSeconds: TranscriptClaimSeconds
 	});
 }
 
@@ -143,6 +160,10 @@ async function TryLocalTranscription(Job: MediaJobRow) {
 	const Model = TranscriptModel(Job);
 	const Command = ModelCommand(Model);
 	if (!Command || !Job.OutputPath || !existsSync(Job.OutputPath)) return null;
+	const ChunkPlan = SmartChunkPlanForJob(Job);
+	if (ChunkPlan?.Chunks?.some((Chunk) => Chunk.Status === 'ready')) {
+		return await TryChunkedLocalTranscription(Job, Command, Model, ChunkPlan);
+	}
 	const Dir = join(TranscriptRoot, `job-${Job.Id}`, 'generated');
 	const Output = join(Dir, 'transcript.vtt');
 	mkdirSync(Dir, { recursive: true });
@@ -161,12 +182,54 @@ async function TryLocalTranscription(Job: MediaJobRow) {
 	};
 }
 
+async function TryChunkedLocalTranscription(Job: MediaJobRow, Command: string, Model: string, ChunkPlan: SmartChunkPlan) {
+	const Chunks = (ChunkPlan.Chunks ?? []).filter((Chunk) => Chunk.Status === 'ready' && existsSync(Chunk.Path));
+	if (!Chunks.length) return null;
+	const Dir = join(TranscriptRoot, `job-${Job.Id}`, 'generated', 'chunks');
+	mkdirSync(Dir, { recursive: true });
+	const Segments: Segment[] = [];
+	const ChunkStatuses: Array<{ Index: number; Label: string; Status: string; SegmentCount?: number; Error?: string }> = [];
+
+	for (const Chunk of Chunks) {
+		const Output = join(Dir, `chunk-${String(Chunk.Index).padStart(3, '0')}.vtt`);
+		await SaveChunkTranscriptStatus(Job, ChunkPlan, ChunkStatuses, Chunk, 'transcribing');
+		const ResolvedCommand = Command
+			.replaceAll('{input}', Quote(Chunk.Path))
+			.replaceAll('{output}', Quote(Output))
+			.replaceAll('{model}', Model);
+		try {
+			await RunCommand(ResolvedCommand, [], { Shell: true });
+			if (!existsSync(Output)) throw new Error('transcript.vtt was not created for this chunk');
+			const ChunkSegments = ParseVtt(readFileSync(Output, 'utf8')).map((Segment) => OffsetSegment(Segment, Chunk.Start));
+			Segments.push(...ChunkSegments);
+			ChunkStatuses.push({ Index: Chunk.Index, Label: Chunk.Label, Status: 'done', SegmentCount: ChunkSegments.length });
+			await SaveChunkTranscriptStatus(Job, ChunkPlan, ChunkStatuses, Chunk, 'done');
+		} catch (Reason) {
+			ChunkStatuses.push({
+				Index: Chunk.Index,
+				Label: Chunk.Label,
+				Status: 'failed',
+				Error: Reason instanceof Error ? Reason.message : 'Unknown chunk transcription error'
+			});
+			await SaveChunkTranscriptStatus(Job, ChunkPlan, ChunkStatuses, Chunk, 'failed');
+		}
+	}
+
+	const FinalSegments = MergeDuplicateSegments(Segments.sort((A, B) => TimestampSeconds(A.Start) - TimestampSeconds(B.Start)));
+	if (!FinalSegments.length) throw new Error('Chunked transcription finished but did not produce readable timestamp segments');
+	return {
+		Text: SegmentsToText(FinalSegments),
+		Segments: FinalSegments,
+		Language: process.env.VANTAGE_TRANSCRIPT_LANGUAGE ?? 'unknown'
+	};
+}
+
 async function SaveTranscript(Job: MediaJobRow, Text: string, Segments: Segment[], Source: string, Language: string, Confidence: number, Model: string) {
 	const Now = new Date().toISOString();
 	const Enriched = await EnrichTranscript(Job, Text, Segments);
 	const FinalSegments = Enriched?.Segments?.length ? Enriched.Segments : Segments;
 	const FinalText = SegmentsToText(FinalSegments);
-	const Metadata = ParseMetadata(Job.MetadataJson);
+	const Metadata = await CurrentMetadata(Job.Id, Job.MetadataJson);
 	await Run(
 		`update media_jobs
 		 set transcript_text = ?, transcript_format = ?, transcript_language = ?, transcript_confidence = ?, transcript_model = ?,
@@ -305,6 +368,31 @@ function NormalizeTimestamp(Value = '00:00:00.000') {
 	return Value.replace(',', '.');
 }
 
+function OffsetSegment(Segment: Segment, OffsetSeconds: number): Segment {
+	return {
+		...Segment,
+		Start: FormatTimestamp(TimestampSeconds(Segment.Start) + OffsetSeconds),
+		End: FormatTimestamp(TimestampSeconds(Segment.End) + OffsetSeconds)
+	};
+}
+
+function TimestampSeconds(Value: string) {
+	const Parts = Value.replace(',', '.').split(':').map(Number);
+	if (Parts.some((Part) => !Number.isFinite(Part))) return 0;
+	if (Parts.length === 3) return Parts[0] * 3600 + Parts[1] * 60 + Parts[2];
+	if (Parts.length === 2) return Parts[0] * 60 + Parts[1];
+	return Parts[0] || 0;
+}
+
+function FormatTimestamp(Seconds: number) {
+	const Safe = Math.max(0, Seconds);
+	const Hours = Math.floor(Safe / 3600);
+	const Minutes = Math.floor((Safe % 3600) / 60);
+	const WholeSeconds = Math.floor(Safe % 60);
+	const Milliseconds = Math.round((Safe - Math.floor(Safe)) * 1000);
+	return `${String(Hours).padStart(2, '0')}:${String(Minutes).padStart(2, '0')}:${String(WholeSeconds).padStart(2, '0')}.${String(Milliseconds).padStart(3, '0')}`;
+}
+
 function SegmentsToText(Segments: Segment[]) {
 	return Segments.map((Segment) => `[${Segment.Start} - ${Segment.End}] ${Segment.Text}`).join('\n');
 }
@@ -339,6 +427,54 @@ function ParseMetadata(Raw?: string | null) {
 	} catch {
 		return {};
 	}
+}
+
+function SmartChunkPlanForJob(Job: MediaJobRow): SmartChunkPlan | null {
+	const Metadata = ParseMetadata(Job.MetadataJson) as { SmartChunks?: SmartChunkPlan };
+	return Metadata.SmartChunks?.Status === 'ready' ? Metadata.SmartChunks : null;
+}
+
+async function SaveChunkTranscriptStatus(
+	Job: MediaJobRow,
+	ChunkPlan: SmartChunkPlan,
+	Statuses: Array<{ Index: number; Label: string; Status: string; SegmentCount?: number; Error?: string }>,
+	CurrentChunk: SmartChunk,
+	Status: string
+) {
+	const Metadata = ParseMetadata(Job.MetadataJson);
+	const Done = Statuses.filter((Chunk) => Chunk.Status === 'done').length;
+	const Total = ChunkPlan.Chunks?.filter((Chunk) => Chunk.Status === 'ready').length ?? 0;
+	const Progress = Total ? Math.min(68, 58 + Math.round((Done / Total) * 10)) : 58;
+	const Now = new Date().toISOString();
+	await Run(
+		`update media_jobs
+		 set progress = ?, metadata_json = ?, updated_at = ?, claim_expires_at = ?
+		 where id = ?`,
+		[
+			Progress,
+			JSON.stringify({
+				...Metadata,
+				SmartChunks: ChunkPlan,
+				ChunkTranscript: {
+					Status,
+					CurrentIndex: CurrentChunk.Index,
+					CurrentLabel: CurrentChunk.Label,
+					Done,
+					Total,
+					UpdatedAt: Now,
+					Chunks: Statuses
+				}
+			}),
+			Now,
+			new Date(Date.now() + TranscriptClaimSeconds * 1000).toISOString(),
+			Job.Id
+		]
+	);
+}
+
+async function CurrentMetadata(Id: number, Fallback?: string | null) {
+	const Row = await Get<{ MetadataJson?: string | null }>('select metadata_json as "MetadataJson" from media_jobs where id = ? and claimed_by = ?', [Id, WorkerInstanceId]);
+	return ParseMetadata(Row?.MetadataJson ?? Fallback);
 }
 
 function IsSegment(Value: unknown): Value is Segment {
