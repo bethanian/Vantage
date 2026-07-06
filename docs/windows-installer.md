@@ -19,6 +19,31 @@ dist\VantageLocalSetup.exe
 
 Upload that file to a GitHub Release. Teammates only need to download and run the EXE.
 
+## Code signing
+
+For a release EXE that Windows trusts, sign with a real code-signing certificate. A self-signed certificate can prove the file was not changed after signing, but it will not remove SmartScreen warnings for teammates unless their PCs trust that certificate.
+
+With a certificate already installed in your Windows user certificate store:
+
+```powershell
+$env:VANTAGE_SIGN_CERT_THUMBPRINT = "YOUR_CERT_THUMBPRINT"
+powershell -ExecutionPolicy Bypass -File scripts\build-vantage-local-installer.ps1
+```
+
+With a `.pfx` certificate file:
+
+```powershell
+$env:VANTAGE_SIGN_CERT_PFX = "C:\Path\to\certificate.pfx"
+$env:VANTAGE_SIGN_CERT_PASSWORD = "certificate-password"
+powershell -ExecutionPolicy Bypass -File scripts\build-vantage-local-installer.ps1
+```
+
+For a temporary unsigned internal build:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-vantage-local-installer.ps1 -SkipSigning
+```
+
 ## What teammates will enter
 
 The installer can automate the machine setup, but each PC still needs the private Vantage values:
