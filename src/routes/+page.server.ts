@@ -394,6 +394,17 @@ export const actions: Actions = {
 		const Task = await Get<ClipTaskDbRow>('select * from clip_tasks where id = ?', [ClipTaskId]);
 		if (!Task) return fail(404, { Message: 'Clip task was not found' });
 		if (!Task.source_url) return fail(400, { Message: 'Queued item has no source URL' });
+		const ExistingJob = await Get<{ Id: number; Stage: string }>(
+			`select id as "Id", stage as "Stage" from media_jobs
+			 where clip_task_id = ? and stage not in ('failed', 'completed')
+			 order by id desc limit 1`,
+			[Task.id]
+		);
+		if (ExistingJob) {
+			await Run('update media_jobs set updated_at = ? where id = ?', [new Date().toISOString(), ExistingJob.Id]);
+			await MarkClipTaskAction(Task.id, Actor, `Download already ${ExistingJob.Stage}`);
+			return { Updated: 'MediaJob' };
+		}
 		const Metadata = await BuildMediaJobMetadata({
 			SourceUrl: Task.source_url,
 			Title: Task.source,

@@ -430,7 +430,33 @@
 	}
 
 	function JobsForTask(Task: ClipTask) {
-		return MediaJobs.filter((Job) => Job.ClipTaskId === Task.Id || (Job.SourceUrl && Job.SourceUrl === Task.SourceUrl));
+		return MediaJobs
+			.filter((Job) => Job.ClipTaskId === Task.Id)
+			.sort((A, B) => B.Id - A.Id);
+	}
+
+	function QueueJobForTask(Task: ClipTask) {
+		return JobsForTask(Task)[0];
+	}
+
+	function QueueJobLabel(Job?: MediaJob) {
+		if (!Job) return 'needs download';
+		if (Job.Stage === 'waiting' && Job.Progress === 0) return 'queued';
+		if (Job.Stage === 'failed') return 'failed';
+		if (Job.Stage === 'completed' || Job.Stage === 'ready for review') return 'media ready';
+		return `${Job.Stage} ${Job.Progress}%`;
+	}
+
+	function QueueJobClass(Job?: MediaJob) {
+		if (!Job) return 'Pending';
+		if (Job.Stage === 'failed') return 'Failed';
+		if (Job.Stage === 'completed' || Job.Stage === 'ready for review') return 'Ready';
+		return 'Working';
+	}
+
+	function MediaJobSummary(Job: MediaJob) {
+		if (Job.Stage === 'waiting' && Job.Progress === 0) return 'Queued for the local worker.';
+		return `${Job.MediaStatus || 'source media'} / ${Job.Progress}% / ${Job.EstimatedFileSize || 'size pending'}`;
 	}
 
 	function TranscriptMatches(Text: string, Query: string) {
@@ -1510,10 +1536,15 @@
 						<div class="SectionHead"><span>queued clips</span><span>{QueueState.length}</span></div>
 						<div class="EditorQueueList">
 							{#each QueueState as Task}
+								{@const TaskJob = QueueJobForTask(Task)}
 								<button class:Active={SelectedEditorTask?.Id === Task.Id} onclick={() => SelectEditorTask(Task)}>
 									<span class="QueueCreator">{Task.Platform} / {Task.Creator}</span>
 									<strong>{Task.Source}</strong>
-									<small>{Task.Timestamp || '0:00'} / {NormalizeQueueStatus(Task.Status)} / {JobsForTask(Task).length ? 'media ready' : 'needs download'}</small>
+									<span class="QueueCardMeta">
+										<span>{Task.Timestamp || '0:00'}</span>
+										<span>{NormalizeQueueStatus(Task.Status)}</span>
+										<span class={QueueJobClass(TaskJob)}>{QueueJobLabel(TaskJob)}</span>
+									</span>
 								</button>
 							{:else}
 								<div class="EmptyState MiniEmpty">
@@ -1554,7 +1585,7 @@
 											<i class="ti ti-download"></i>
 											<div>
 												<h2>{ActiveEditorJob ? 'Source media' : 'Download source'}</h2>
-												<p>{ActiveEditorJob ? `${ActiveEditorJob.MediaStatus} / ${ActiveEditorJob.Progress}% / ${ActiveEditorJob.EstimatedFileSize}` : 'Create a media job from this queued source.'}</p>
+												<p>{ActiveEditorJob ? MediaJobSummary(ActiveEditorJob) : 'Create a media job from this queued source.'}</p>
 											</div>
 											<form method="POST" action="?/PrepareClipDownload" use:enhance={FormFeedback('Download job')}>
 												<input type="hidden" name="ClipTaskId" value={SelectedEditorTask.Id} />
@@ -4690,8 +4721,10 @@
 	}
 
 	.EditorQueueList {
+		align-content: start;
 		display: grid;
 		gap: 6px;
+		grid-auto-rows: max-content;
 		overflow-y: auto;
 		padding-right: 4px;
 	}
@@ -4702,8 +4735,8 @@
 		border-radius: 7px;
 		display: grid;
 		gap: 5px;
-		min-height: 92px;
-		padding: 9px;
+		min-height: 68px;
+		padding: 8px 9px;
 		text-align: left;
 	}
 
@@ -4719,14 +4752,44 @@
 		line-height: 1.25;
 		-webkit-box-orient: vertical;
 		display: -webkit-box;
-		-webkit-line-clamp: 3;
-		line-clamp: 3;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
 		overflow: hidden;
 	}
 
-	.EditorQueueList small {
+	.QueueCardMeta {
+		align-items: center;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 5px;
+	}
+
+	.QueueCardMeta span {
+		background: var(--Surface);
+		border: 1px solid var(--RuleSoft);
+		border-radius: 999px;
 		color: var(--Ink3);
-		font-size: 11px;
+		font-size: 10px;
+		line-height: 1;
+		padding: 4px 6px;
+	}
+
+	.QueueCardMeta span.Ready {
+		background: var(--GreenSoft);
+		border-color: #b0d0bc;
+		color: var(--Green);
+	}
+
+	.QueueCardMeta span.Working {
+		background: #f7efd9;
+		border-color: #e0cc91;
+		color: #7b5b12;
+	}
+
+	.QueueCardMeta span.Failed {
+		background: #fff1ee;
+		border-color: #e6b7ae;
+		color: #8c2a1e;
 	}
 
 	.EditorWorkspace {
