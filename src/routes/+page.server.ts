@@ -396,9 +396,9 @@ export const actions: Actions = {
 		if (!Task.source_url) return fail(400, { Message: 'Queued item has no source URL' });
 		const ExistingJob = await Get<{ Id: number; Stage: string }>(
 			`select id as "Id", stage as "Stage" from media_jobs
-			 where clip_task_id = ? and stage not in ('failed', 'completed')
+			 where clip_task_id = ? and source_url = ? and stage not in ('failed', 'completed')
 			 order by id desc limit 1`,
-			[Task.id]
+			[Task.id, Task.source_url]
 		);
 		if (ExistingJob) {
 			await Run('update media_jobs set updated_at = ? where id = ?', [new Date().toISOString(), ExistingJob.Id]);
@@ -1164,6 +1164,7 @@ export const actions: Actions = {
 		const Actor = ActorFromForm(Form);
 		const Id = NumberField(Form, 'Id', 0);
 		if (!Id) return fail(400, { Message: 'Clip task id is required' });
+		await DeleteMediaForClipTask(Id);
 		await Run('delete from clip_tasks where id = ?', [Id]);
 		await WriteActivity(Actor, { EntityType: 'ClipTask', EntityId: Id, Action: 'Deleted clip' });
 		return { Deleted: 'ClipTask' };
@@ -1385,6 +1386,16 @@ async function CreateClipExport(MediaJobId: number, ClipCandidateId: number | nu
 	);
 	await Run('update media_jobs set stage = ?, progress = ?, updated_at = ? where id = ?', ['exporting', 90, Now, MediaJobId]);
 	return Id;
+}
+
+async function DeleteMediaForClipTask(ClipTaskId: number) {
+	const Jobs = await All<{ Id: number }>('select id as "Id" from media_jobs where clip_task_id = ?', [ClipTaskId]);
+	for (const Job of Jobs) {
+		await Run('delete from clip_previews where media_job_id = ?', [Job.Id]);
+		await Run('delete from clip_exports where media_job_id = ?', [Job.Id]);
+		await Run('delete from clip_candidates where media_job_id = ?', [Job.Id]);
+		await Run('delete from media_jobs where id = ?', [Job.Id]);
+	}
 }
 
 async function CreateClipPreview(MediaJobId: number, ClipCandidateId: number) {

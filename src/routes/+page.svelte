@@ -450,7 +450,7 @@
 
 	function JobsForTask(Task: ClipTask) {
 		return MediaJobs
-			.filter((Job) => Job.ClipTaskId === Task.Id)
+			.filter((Job) => Job.ClipTaskId === Task.Id && (!Task.SourceUrl || Job.SourceUrl === Task.SourceUrl))
 			.sort((A, B) => B.Id - A.Id);
 	}
 
@@ -4899,9 +4899,10 @@
 		background: var(--Surface);
 		border-right: 1px solid var(--Rule);
 		display: grid;
+		gap: 10px;
 		grid-template-rows: auto minmax(0, 1fr);
 		min-height: 0;
-		padding: 14px;
+		padding: 18px 14px 14px;
 	}
 
 	.EditorQueueList {
@@ -4910,7 +4911,7 @@
 		gap: 6px;
 		grid-auto-rows: max-content;
 		overflow-y: auto;
-		padding-right: 4px;
+		padding: 2px 4px 0 0;
 	}
 
 	.EditorQueueList button {

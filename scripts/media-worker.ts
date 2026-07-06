@@ -2,7 +2,7 @@ import { createWriteStream, existsSync, mkdirSync, readdirSync, statSync } from 
 import { dirname, extname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { EnsureAppDatabaseReady, Get, Run } from '../src/lib/server/db/app-db';
-import { ClaimNext } from './worker-claim';
+import { ClaimNext, WorkerInstanceId } from './worker-claim';
 
 type MediaJobRow = {
 	Id: number;
@@ -33,6 +33,8 @@ type YtDlpMetadata = {
 	filesize?: number;
 	ext?: string;
 };
+
+const MediaClaimSeconds = Number(process.env.VANTAGE_MEDIA_CLAIM_SECONDS ?? 180);
 
 class WorkerStoppedError extends Error {
 	constructor(
@@ -86,11 +88,11 @@ async function NextJob() {
 		 live_recording_mode as "LiveRecordingMode", live_chunk_seconds as "LiveChunkSeconds",
 		 live_analyze_while_recording as "LiveAnalyzeWhileRecording", live_generate_periodic_clips as "LiveGeneratePeriodicClips",
 		 cancelled_at as "CancelledAt"`,
-		Where: `stage = 'waiting'
+		Where: `stage in ('waiting', 'fetching source', 'downloading', 'recording livestream')
 		   and cancelled_at is null
 		   and manual_review_status != 'Rejected'`,
 		OrderBy: 'priority desc, id asc',
-		ClaimSeconds: 30 * 60
+		ClaimSeconds: MediaClaimSeconds
 	});
 }
 
@@ -282,6 +284,15 @@ async function UpdateJob(
 	}).filter(([, Value]) => Value !== undefined);
 	const SetSql = Entries.map(([Key]) => `${Key} = ?`).join(', ');
 	await Run(`update media_jobs set ${SetSql} where id = ?`, [...Entries.map(([, Value]) => Value), Id]);
+	if (Patch.Stage && ['completed', 'failed', 'paused', 'requires manual review'].includes(Patch.Stage)) {
+		await Run('update media_jobs set claimed_by = null, claimed_at = null, claim_expires_at = null where id = ? and claimed_by = ?', [Id, WorkerInstanceId]);
+	} else {
+		await Run('update media_jobs set claim_expires_at = ? where id = ? and claimed_by = ?', [
+			new Date(Date.now() + MediaClaimSeconds * 1000).toISOString(),
+			Id,
+			WorkerInstanceId
+		]);
+	}
 }
 
 async function FailJob(Id: number, Message: string) {
