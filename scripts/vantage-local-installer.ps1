@@ -166,4 +166,4 @@ if ($LASTEXITCODE) { exit $LASTEXITCODE }
 Write-Host ""
 Write-Host "Vantage Local is ready."
 Write-Host "Dashboard: $DashboardUrl"
-Write-Host "Tray app: Start Menu login task plus local tray controller"
+Write-Host "Tray app: Start Menu > Vantage > Vantage Local"

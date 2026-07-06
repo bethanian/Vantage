@@ -87,3 +87,8 @@ The installer checks or installs:
 - yt-dlp
 
 Then it installs the app packages, writes `.env.local`, runs the local worker doctor, registers the local worker stack on login, and starts the tray controller.
+
+It also creates Start Menu shortcuts under `Vantage`:
+
+- `Vantage Local`: opens the tray controller.
+- `Vantage Dashboard`: opens the configured hosted dashboard URL.

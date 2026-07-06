@@ -21,6 +21,10 @@ Write-Host "Checking Vantage Local..."
 npm.cmd run workers:local:doctor
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
+Write-Host "Creating Start Menu shortcuts..."
+& powershell -ExecutionPolicy Bypass -File scripts\create-local-shortcuts.ps1 -EnvFile $EnvFile
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
 if ($InstallOnLogin) {
 	Write-Host "Installing Vantage Local on login..."
 	& powershell -ExecutionPolicy Bypass -File scripts\install-local-worker-task.ps1 -EnvFile $EnvFile -Workers $Workers
