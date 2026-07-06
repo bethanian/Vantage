@@ -4535,12 +4535,12 @@
 
 	.JobProgress span {
 		background:
-			linear-gradient(180deg, rgba(126, 215, 159, 0.92), rgba(31, 109, 67, 0.92)),
-			linear-gradient(90deg, rgba(255, 255, 255, 0.34), transparent 42%, rgba(255, 255, 255, 0.22));
+			linear-gradient(180deg, rgba(105, 151, 119, 0.72), rgba(53, 107, 70, 0.82)),
+			linear-gradient(90deg, rgba(255, 255, 255, 0.2), transparent 50%);
 		border-radius: inherit;
 		box-shadow:
-			inset 0 1px 0 rgba(255, 255, 255, 0.6),
-			0 0 14px rgba(47, 147, 96, 0.22);
+			inset 0 1px 0 rgba(255, 255, 255, 0.38),
+			0 0 10px rgba(47, 104, 66, 0.16);
 		display: block;
 		height: 100%;
 		min-width: 6%;
@@ -4551,7 +4551,7 @@
 
 	.JobProgress.Active span::after {
 		animation: GlassProgressSweep 1.8s ease-in-out infinite;
-		background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.44), transparent);
+		background: linear-gradient(90deg, transparent, rgba(236, 246, 238, 0.42), transparent);
 		content: '';
 		inset: 0;
 		position: absolute;
