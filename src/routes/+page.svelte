@@ -4512,19 +4512,35 @@
 	}
 
 	.JobProgress {
-		background: color-mix(in srgb, var(--GreenSoft) 44%, var(--RuleSoft));
+		background: rgba(255, 255, 255, 0.42);
+		backdrop-filter: blur(10px);
 		border-radius: 999px;
-		box-shadow: inset 0 0 0 1px rgba(20, 96, 57, 0.08);
+		box-shadow:
+			inset 0 0 0 1px rgba(26, 25, 22, 0.08),
+			inset 0 1px 0 rgba(255, 255, 255, 0.72),
+			0 8px 18px rgba(26, 25, 22, 0.05);
 		height: 10px;
 		overflow: hidden;
 		position: relative;
 	}
 
+	.JobProgress::before {
+		background: linear-gradient(180deg, rgba(255, 255, 255, 0.68), transparent);
+		content: '';
+		inset: 1px 1px auto;
+		height: 45%;
+		position: absolute;
+		z-index: 1;
+	}
+
 	.JobProgress span {
 		background:
-			linear-gradient(90deg, #1f6d43, #2f9360 48%, #74c892);
+			linear-gradient(180deg, rgba(126, 215, 159, 0.92), rgba(31, 109, 67, 0.92)),
+			linear-gradient(90deg, rgba(255, 255, 255, 0.34), transparent 42%, rgba(255, 255, 255, 0.22));
 		border-radius: inherit;
-		box-shadow: 0 0 16px rgba(47, 147, 96, 0.38);
+		box-shadow:
+			inset 0 1px 0 rgba(255, 255, 255, 0.6),
+			0 0 14px rgba(47, 147, 96, 0.22);
 		display: block;
 		height: 100%;
 		min-width: 6%;
@@ -4533,34 +4549,13 @@
 		transition: width 360ms ease;
 	}
 
-	.JobProgress.Active span::before,
 	.JobProgress.Active span::after {
-		animation: LiquidDrift 2.6s linear infinite;
-		background:
-			radial-gradient(circle at 22% 58%, rgba(255, 255, 255, 0.5) 0 12%, transparent 13%),
-			radial-gradient(circle at 68% 42%, rgba(255, 255, 255, 0.28) 0 10%, transparent 11%),
-			linear-gradient(115deg, transparent 0 18%, rgba(255, 255, 255, 0.22) 19% 30%, transparent 31% 48%, rgba(255, 255, 255, 0.16) 49% 58%, transparent 59%);
+		animation: GlassProgressSweep 1.8s ease-in-out infinite;
+		background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.44), transparent);
 		content: '';
 		inset: 0;
 		position: absolute;
-		width: 200%;
-	}
-
-	.JobProgress.Active span::after {
-		animation-direction: reverse;
-		animation-duration: 4.2s;
-		opacity: 0.58;
-	}
-
-	.JobProgress.Active::after {
-		animation: LiquidPulse 1.45s ease-in-out infinite;
-		background: rgba(255, 255, 255, 0.42);
-		border-radius: inherit;
-		content: '';
-		filter: blur(7px);
-		inset: 2px auto 2px 0;
-		position: absolute;
-		width: 24%;
+		transform: translateX(-100%);
 	}
 
 	.MediaJobActivity {
@@ -4577,26 +4572,17 @@
 		font-size: 14px;
 	}
 
-	@keyframes LiquidDrift {
-		from {
-			transform: translateX(-50%);
-		}
-		to {
-			transform: translateX(0);
-		}
-	}
-
-	@keyframes LiquidPulse {
+	@keyframes GlassProgressSweep {
 		0% {
-			opacity: 0.12;
-			transform: translateX(-20%);
+			opacity: 0;
+			transform: translateX(-100%);
 		}
 		50% {
-			opacity: 0.32;
+			opacity: 1;
 		}
 		100% {
-			opacity: 0.12;
-			transform: translateX(320%);
+			opacity: 0;
+			transform: translateX(100%);
 		}
 	}
 
