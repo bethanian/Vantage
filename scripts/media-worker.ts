@@ -88,6 +88,9 @@ const LogRoot = resolve(process.env.VANTAGE_MEDIA_LOG_DIR ?? 'media/logs');
 const ChunkRoot = resolve(process.env.VANTAGE_MEDIA_CHUNK_DIR ?? 'media/chunks');
 const MaxLiveSeconds = Number(process.env.VANTAGE_MAX_LIVE_RECORD_SECONDS ?? 7200);
 const SmartChunkMinSeconds = Number(process.env.VANTAGE_SMART_CHUNK_MIN_SECONDS ?? 3600);
+const ConcurrentFragments = ClampNumber(process.env.VANTAGE_YTDLP_CONCURRENT_FRAGMENTS, 12, 1, 32);
+const FragmentRetries = ClampNumber(process.env.VANTAGE_YTDLP_FRAGMENT_RETRIES, 20, 0, 100);
+const DownloadRetries = ClampNumber(process.env.VANTAGE_YTDLP_RETRIES, 10, 0, 100);
 
 await EnsureAppDatabaseReady();
 mkdirSync(DownloadRoot, { recursive: true });
@@ -155,6 +158,14 @@ async function ProcessJob(Job: MediaJobRow) {
 		'--newline',
 		'--no-playlist',
 		'--restrict-filenames',
+		'--concurrent-fragments',
+		String(ConcurrentFragments),
+		'--fragment-retries',
+		String(FragmentRetries),
+		'--retries',
+		String(DownloadRetries),
+		'--retry-sleep',
+		'fragment:exp=1:20',
 		'--write-info-json',
 		'--write-thumbnail',
 		'--paths',
@@ -180,7 +191,7 @@ async function ProcessJob(Job: MediaJobRow) {
 		EstimatedFileSize: Bytes(Metadata.filesize ?? Metadata.filesize_approx),
 		MetadataJson: JSON.stringify(Metadata)
 	});
-	await UpdateDownloadActivity(Job.Id, Metadata, Stage, 'Preparing download files.');
+	await UpdateDownloadActivity(Job.Id, Metadata, Stage, `Preparing download files with ${ConcurrentFragments} concurrent fragments.`);
 
 	let LastActivityWriteAt = 0;
 	let LastProgress = 10;
@@ -623,6 +634,12 @@ function FormatTimestamp(Seconds: number) {
 	const Minutes = Math.floor((Safe % 3600) / 60);
 	const Remaining = Safe % 60;
 	return Hours ? `${Hours}:${String(Minutes).padStart(2, '0')}:${String(Remaining).padStart(2, '0')}` : `${Minutes}:${String(Remaining).padStart(2, '0')}`;
+}
+
+function ClampNumber(Value: string | undefined, Fallback: number, Min: number, Max: number) {
+	const NumberValue = Number(Value);
+	if (!Number.isFinite(NumberValue)) return Fallback;
+	return Math.max(Min, Math.min(Max, Math.round(NumberValue)));
 }
 
 function Bytes(Size?: number) {
