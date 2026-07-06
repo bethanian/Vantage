@@ -209,6 +209,7 @@
 	let ShowEditorAdvanced = $state(false);
 	let IsSidebarOpen = $state(false);
 	let WorkerNow = $state(Date.now());
+	let NextJobRefreshAt = $state(Date.now() + 30_000);
 	let WorkerRefreshFailed = $state(false);
 	let AudioContextInstance: AudioContext | null = null;
 	let LastSoundAt = 0;
@@ -226,18 +227,28 @@
 		const UpdateDeviceType = () => (IsMobileDevice = MobileQuery.matches);
 		const OnKeydown = (Event: KeyboardEvent) => HandlePreviewShortcut(Event);
 		const WorkerRefreshTimer = setInterval(() => void RefreshWorkerHeartbeats(), 20000);
+		const ClockTimer = setInterval(() => (WorkerNow = Date.now()), 1000);
+		const JobRefreshTimer = setInterval(() => void RefreshJobData(), 30000);
 		UpdateDeviceType();
 		void RefreshWorkerHeartbeats();
+		void RefreshJobData();
 		MobileQuery.addEventListener('change', UpdateDeviceType);
 		window.addEventListener('keydown', OnKeydown);
 		window.addEventListener('focus', RefreshWorkerHeartbeats);
 		return () => {
 			clearInterval(WorkerRefreshTimer);
+			clearInterval(ClockTimer);
+			clearInterval(JobRefreshTimer);
 			MobileQuery.removeEventListener('change', UpdateDeviceType);
 			window.removeEventListener('keydown', OnKeydown);
 			window.removeEventListener('focus', RefreshWorkerHeartbeats);
 		};
 	});
+
+	async function RefreshJobData() {
+		NextJobRefreshAt = Date.now() + 30_000;
+		await invalidateAll();
+	}
 
 	async function RefreshWorkerHeartbeats() {
 		WorkerNow = Date.now();
@@ -462,7 +473,8 @@
 	function MediaJobActivity(Job: MediaJob) {
 		const Claim = ClaimLabel(Job.ClaimedBy, Job.ClaimExpiresAt);
 		const Prefix = Claim ? `${Claim} - ` : '';
-		const Updated = Job.UpdatedAt ? `Last update ${RelativeTime(Job.UpdatedAt)}.` : '';
+		const Updated = Job.UpdatedAt ? `Last update ${RelativeTime(Job.UpdatedAt)}.` : 'Last update pending.';
+		const Refresh = `Updating in ${NextJobRefreshSeconds()}s.`;
 		const StageText: Record<string, string> = {
 			waiting: 'Waiting for the local worker to pick this up.',
 			'fetching source': 'Fetching source details and checking the link.',
@@ -477,7 +489,7 @@
 			failed: Job.ErrorMessage ?? 'Download failed.',
 			'requires manual review': 'Manual source review is needed before download.'
 		};
-		return `${Prefix}${StageText[Job.Stage] ?? `Working on ${Job.Stage}.`} ${Updated}`.trim();
+		return `${Prefix}${StageText[Job.Stage] ?? `Working on ${Job.Stage}.`} ${Updated} ${Refresh}`.trim();
 	}
 
 	function MediaJobActive(Job: MediaJob) {
@@ -493,6 +505,10 @@
 		const Minutes = Math.round(Seconds / 60);
 		if (Minutes < 60) return `${Minutes}m ago`;
 		return `${Math.round(Minutes / 60)}h ago`;
+	}
+
+	function NextJobRefreshSeconds() {
+		return Math.max(0, Math.ceil((NextJobRefreshAt - WorkerNow) / 1000));
 	}
 
 	function TranscriptMatches(Text: string, Query: string) {
