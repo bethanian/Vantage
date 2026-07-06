@@ -35,7 +35,7 @@
 	const SavedSearches = $derived(data.SavedSearches);
 	const SyncRuns = $derived(data.SyncRuns);
 	const ActivityEvents = $derived(data.ActivityEvents);
-	const WorkerHeartbeats = $derived(data.WorkerHeartbeats as WorkerHeartbeat[]);
+	let WorkerHeartbeats = $state<WorkerHeartbeat[]>([]);
 
 	const Views: ViewName[] = ['Feed', 'Queue', 'Editor', 'Accounts'];
 	const FeedFilters = ['All', 'Live now', 'Whop', 'Clipping.net', 'Not clipped'];
@@ -182,9 +182,9 @@
 	const CreatorItems = $derived(
 		ContentItems.filter((Item) => Item.Creator === SelectedCreator.Name).slice(0, 5)
 	);
-	const SelectedEditorTask = $derived(QueueState.find((Task) => Task.Id === SelectedEditorTaskId) ?? QueueState[0]);
+	const SelectedEditorTask = $derived(QueueState.find((Task) => Task.Id === SelectedEditorTaskId) ?? null);
 	const EditorJobs = $derived(SelectedEditorTask ? JobsForTask(SelectedEditorTask) : []);
-	const ActiveEditorJob = $derived(EditorJobs[0] ?? (SelectedEditorTask ? undefined : SelectedMediaJob));
+	const ActiveEditorJob = $derived(EditorJobs[0] ?? undefined);
 	const ActiveEditorCandidates = $derived(ClipCandidates.filter((Candidate) => Candidate.MediaJobId === ActiveEditorJob?.Id));
 	const ActiveEditorExports = $derived(ClipExports.filter((Export) => Export.MediaJobId === ActiveEditorJob?.Id));
 	const ActiveEditorPreviews = $derived(ClipPreviews.filter((Preview) => Preview.MediaJobId === ActiveEditorJob?.Id));
@@ -209,8 +209,13 @@
 	let ShowEditorAdvanced = $state(false);
 	let IsSidebarOpen = $state(false);
 	let WorkerNow = $state(Date.now());
+	let WorkerRefreshFailed = $state(false);
 	let AudioContextInstance: AudioContext | null = null;
 	let LastSoundAt = 0;
+
+	$effect(() => {
+		if (!WorkerHeartbeats.length) WorkerHeartbeats = data.WorkerHeartbeats as WorkerHeartbeat[];
+	});
 
 	onMount(() => {
 		const SavedActor = localStorage.getItem('VantageActorName') ?? '';
@@ -220,19 +225,32 @@
 		const MobileQuery = window.matchMedia('(max-width: 760px), (pointer: coarse)');
 		const UpdateDeviceType = () => (IsMobileDevice = MobileQuery.matches);
 		const OnKeydown = (Event: KeyboardEvent) => HandlePreviewShortcut(Event);
-		const WorkerRefreshTimer = setInterval(() => {
-			WorkerNow = Date.now();
-			void invalidateAll();
-		}, 45000);
+		const WorkerRefreshTimer = setInterval(() => void RefreshWorkerHeartbeats(), 20000);
 		UpdateDeviceType();
+		void RefreshWorkerHeartbeats();
 		MobileQuery.addEventListener('change', UpdateDeviceType);
 		window.addEventListener('keydown', OnKeydown);
+		window.addEventListener('focus', RefreshWorkerHeartbeats);
 		return () => {
 			clearInterval(WorkerRefreshTimer);
 			MobileQuery.removeEventListener('change', UpdateDeviceType);
 			window.removeEventListener('keydown', OnKeydown);
+			window.removeEventListener('focus', RefreshWorkerHeartbeats);
 		};
 	});
+
+	async function RefreshWorkerHeartbeats() {
+		WorkerNow = Date.now();
+		try {
+			const Response = await fetch('/api/workers/heartbeats', { cache: 'no-store' });
+			if (!Response.ok) throw new Error(`worker heartbeat refresh failed: ${Response.status}`);
+			const Payload = await Response.json() as { WorkerHeartbeats?: WorkerHeartbeat[]; ServerNow?: string };
+			WorkerHeartbeats = Payload.WorkerHeartbeats ?? WorkerHeartbeats;
+			WorkerRefreshFailed = false;
+		} catch {
+			WorkerRefreshFailed = true;
+		}
+	}
 
 	function MatchesFeedFilter(Item: ContentItem, Filter: string) {
 		if (Filter === 'All') return true;
@@ -316,6 +334,35 @@
 		if (Job) SelectedMediaJobId = Job.Id;
 		ActiveView = 'Editor';
 		PushToast(`Editing ${Task.Source}`, 'Info');
+	}
+
+	function SetEditorMode(Mode: EditorModeName) {
+		if (!EditorModeEnabled(Mode)) {
+			PushToast(EditorModeLockedMessage(Mode), 'Info');
+			return;
+		}
+		ActiveEditorMode = Mode;
+	}
+
+	function EditorModeEnabled(Mode: EditorModeName) {
+		if (Mode === 'Download') return Boolean(SelectedEditorTask);
+		if (Mode === 'Transcribe') return Boolean(ActiveEditorJob);
+		return Boolean(ActiveEditorJob?.TranscriptText || ActiveEditorCandidates.length);
+	}
+
+	function EditorModeState(Mode: EditorModeName) {
+		if (ActiveEditorMode === Mode) return 'Active';
+		if (!EditorModeEnabled(Mode)) return 'Locked';
+		if (Mode === 'Download' && ActiveEditorJob) return 'Done';
+		if (Mode === 'Transcribe' && ActiveEditorJob?.TranscriptText) return 'Done';
+		if (Mode === 'Clip Cutter' && ActiveEditorCandidates.length) return 'Done';
+		return 'Ready';
+	}
+
+	function EditorModeLockedMessage(Mode: EditorModeName) {
+		if (!SelectedEditorTask) return 'Choose a queued clip first.';
+		if (Mode === 'Transcribe') return 'Download or attach source media before transcribing.';
+		return 'Generate or save a transcript before cutting clips.';
 	}
 
 	function IsQueued(Item: ContentItem) {
@@ -640,8 +687,8 @@
 
 	function IsWorkerFresh(Heartbeat?: WorkerHeartbeat) {
 		if (!Heartbeat?.LastSeenAt) return false;
-		const Fresh = WorkerNow - new Date(Heartbeat.LastSeenAt).getTime() < 1000 * 75;
-		return Fresh && ['running', 'running-once'].includes(Heartbeat.Status);
+		const Fresh = WorkerNow - new Date(Heartbeat.LastSeenAt).getTime() < 1000 * 180;
+		return Fresh && ['running', 'running-once', 'starting'].includes(Heartbeat.Status);
 	}
 
 	function WorkerList(Heartbeat?: WorkerHeartbeat) {
@@ -663,6 +710,12 @@
 		const Seconds = Math.max(0, Math.round((WorkerNow - new Date(Heartbeat.LastSeenAt).getTime()) / 1000));
 		if (Seconds < 60) return `${Seconds}s ago`;
 		return `${Math.round(Seconds / 60)}m ago`;
+	}
+
+	function WorkerFreshnessNote(Heartbeat?: WorkerHeartbeat) {
+		if (!Heartbeat?.LastSeenAt) return 'No heartbeat has reached the dashboard yet.';
+		if (WorkerRefreshFailed) return 'Dashboard could not refresh worker status; keeping the last known state briefly.';
+		return `Last heartbeat ${WorkerAgeLabel(Heartbeat)} from ${Heartbeat.Host ?? 'local PC'}.`;
 	}
 
 	function WorkerCapabilityStatus(Heartbeat: WorkerHeartbeat | undefined, RequiredWorkers: string[]) {
@@ -927,7 +980,7 @@
 	{/each}
 	<div class="NavSpacer"></div>
 	<span class="RefreshTag">{LatestSync ? `${LatestSync.Platform} ${LatestSync.Status.toLowerCase()}` : 'not synced yet'}</span>
-	<span class={`WorkerTag ${WorkerBadgeClass()}`} title={LocalWorker ? `${LocalWorker.Host ?? 'local'} / ${LocalWorker.Workers}` : 'No local worker heartbeat'}>
+	<span class={`WorkerTag ${WorkerBadgeClass()}`} title={WorkerFreshnessNote(LocalWorker)}>
 		<i class="ti ti-server-2"></i>{WorkerBadge}
 	</span>
 	<button class="ActorPill" onclick={() => (NeedsActor = true)}>
@@ -1408,13 +1461,14 @@
 				<div class="EditorTopbar">
 					<div>
 						<span class="PanelLabel">Editor</span>
-						<h1>{SelectedEditorTask ? SelectedEditorTask.Source : 'Select a queued clip'}</h1>
-						<p>{SelectedEditorTask ? `${SelectedEditorTask.Creator} / ${SelectedEditorTask.Platform} / ${NormalizeQueueStatus(SelectedEditorTask.Status)}` : 'Pick something from Queue, then choose Download, Transcribe, or Clip Cutter.'}</p>
+						<h1>{SelectedEditorTask ? 'Clip workspace' : 'Choose a queued clip'}</h1>
+						<p>{SelectedEditorTask ? SelectedEditorTask.Source : 'Start with a queued source, then move through download, transcript, and clip selection.'}</p>
 					</div>
-					<div class="EditorModeSwitch">
+					<div class="EditorStepSwitch">
 						{#each ['Download', 'Transcribe', 'Clip Cutter'] as Mode}
-							<button class:Active={ActiveEditorMode === Mode} onclick={() => (ActiveEditorMode = Mode as EditorModeName)}>
-								<i class={`ti ${Mode === 'Download' ? 'ti-download' : Mode === 'Transcribe' ? 'ti-captions' : 'ti-cut'}`}></i>{Mode}
+							<button class={EditorModeState(Mode as EditorModeName)} onclick={() => SetEditorMode(Mode as EditorModeName)}>
+								<i class={`ti ${Mode === 'Download' ? 'ti-download' : Mode === 'Transcribe' ? 'ti-captions' : 'ti-cut'}`}></i>
+								<span>{Mode}</span>
 							</button>
 						{/each}
 					</div>
@@ -1465,6 +1519,12 @@
 									{/if}
 									<span>{ActiveEditorCandidates.length} clips</span>
 								</div>
+							</div>
+							<div class="EditorReadinessStrip">
+								<span class:Done={Boolean(ActiveEditorJob)}><i class="ti ti-download"></i>{ActiveEditorJob ? ActiveEditorJob.MediaStatus : 'needs source media'}</span>
+								<span class:Done={Boolean(ActiveEditorJob?.TranscriptText)}><i class="ti ti-captions"></i>{ActiveEditorJob?.TranscriptText ? 'transcript ready' : 'needs transcript'}</span>
+								<span class:Done={ActiveEditorCandidates.length > 0}><i class="ti ti-cut"></i>{ActiveEditorCandidates.length ? `${ActiveEditorCandidates.length} clips ready` : 'no clips yet'}</span>
+								<span class:Done={CanUseEditor}><i class="ti ti-server-2"></i>{CanUseEditor ? 'local worker ready' : EditorLockMessage()}</span>
 							</div>
 
 							{#if ActiveEditorMode === 'Download'}
@@ -1770,7 +1830,18 @@
 								</section>
 							{/if}
 						{:else}
-							<div class="EmptyState InlineEmpty"><i class="ti ti-edit"></i><span>Choose a queued clip to start editing.</span></div>
+							<div class="EditorWelcomeState">
+								<i class="ti ti-edit"></i>
+								<div>
+									<h2>Choose a queued clip</h2>
+									<p>The editor will guide it through download, transcript, and clip selection once you pick a source from the list.</p>
+								</div>
+								<div class="EditorWelcomeSteps">
+									<span><i class="ti ti-download"></i>Download</span>
+									<span><i class="ti ti-captions"></i>Transcribe</span>
+									<span><i class="ti ti-cut"></i>Clip</span>
+								</div>
+							</div>
 						{/if}
 					</div>
 				</div>
@@ -4527,7 +4598,7 @@
 		margin-top: 3px;
 	}
 
-	.EditorModeSwitch {
+	.EditorStepSwitch {
 		background: var(--Page);
 		border: 1px solid var(--Rule);
 		border-radius: 8px;
@@ -4535,7 +4606,7 @@
 		padding: 3px;
 	}
 
-	.EditorModeSwitch button,
+	.EditorStepSwitch button,
 	.AdvancedToggle {
 		align-items: center;
 		background: transparent;
@@ -4548,13 +4619,28 @@
 		white-space: nowrap;
 	}
 
-	.EditorModeSwitch button.Active,
-	.EditorModeSwitch button:hover,
+	.EditorStepSwitch button.Active,
+	.EditorStepSwitch button:hover,
 	.AdvancedToggle.Active,
 	.AdvancedToggle:hover {
 		background: var(--Ink);
 		color: var(--Page);
 		transform: translateY(-1px);
+	}
+
+	.EditorStepSwitch button.Done {
+		color: var(--Green);
+	}
+
+	.EditorStepSwitch button.Locked {
+		color: var(--Ink3);
+		opacity: 0.58;
+	}
+
+	.EditorStepSwitch button.Locked:hover {
+		background: transparent;
+		color: var(--Ink3);
+		transform: none;
 	}
 
 	.AdvancedToggle {
@@ -4585,7 +4671,7 @@
 
 	.EditorQueueList {
 		display: grid;
-		gap: 8px;
+		gap: 6px;
 		overflow-y: auto;
 		padding-right: 4px;
 	}
@@ -4593,10 +4679,11 @@
 	.EditorQueueList button {
 		background: var(--Page);
 		border: 1px solid var(--Rule);
-		border-radius: 8px;
+		border-radius: 7px;
 		display: grid;
-		gap: 4px;
-		padding: 10px;
+		gap: 5px;
+		min-height: 92px;
+		padding: 9px;
 		text-align: left;
 	}
 
@@ -4610,6 +4697,11 @@
 	.EditorQueueList strong {
 		font-size: 13px;
 		line-height: 1.25;
+		-webkit-box-orient: vertical;
+		display: -webkit-box;
+		-webkit-line-clamp: 3;
+		line-clamp: 3;
+		overflow: hidden;
 	}
 
 	.EditorQueueList small {
@@ -4618,8 +4710,10 @@
 	}
 
 	.EditorWorkspace {
+		align-content: start;
 		display: grid;
 		gap: 14px;
+		grid-auto-rows: max-content;
 		overflow-y: auto;
 		padding: 18px;
 	}
@@ -4637,15 +4731,21 @@
 		display: flex;
 		gap: 14px;
 		justify-content: space-between;
-		padding: 14px;
+		padding: 12px 14px;
 	}
 
 	.EditorContextCard strong {
 		display: block;
 		font-family: 'Fraunces', serif;
-		font-size: 22px;
+		font-size: 20px;
 		font-weight: 400;
+		line-height: 1.12;
 		margin: 4px 0;
+		-webkit-box-orient: vertical;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		overflow: hidden;
 	}
 
 	.EditorContextCard p {
@@ -4667,6 +4767,83 @@
 		color: var(--Ink2);
 		font-size: 11px;
 		padding: 5px 8px;
+	}
+
+	.EditorReadinessStrip {
+		display: grid;
+		gap: 8px;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+	}
+
+	.EditorReadinessStrip span {
+		align-items: center;
+		background: var(--Surface);
+		border: 1px solid var(--Rule);
+		border-radius: 7px;
+		color: var(--Ink2);
+		display: inline-flex;
+		font-size: 12px;
+		gap: 7px;
+		min-height: 36px;
+		padding: 8px 10px;
+	}
+
+	.EditorReadinessStrip span.Done {
+		background: color-mix(in srgb, var(--GreenSoft) 62%, var(--Surface));
+		border-color: #b0d0bc;
+		color: var(--Green);
+	}
+
+	.EditorWelcomeState {
+		align-items: center;
+		background: var(--Surface);
+		border: 1px solid var(--Rule);
+		border-radius: 8px;
+		display: grid;
+		gap: 18px;
+		grid-template-columns: 54px minmax(0, 1fr) auto;
+		padding: 22px;
+	}
+
+	.EditorWelcomeState > i {
+		align-items: center;
+		background: var(--GreenSoft);
+		border-radius: 10px;
+		color: var(--Green);
+		display: grid;
+		font-size: 28px;
+		height: 54px;
+		place-items: center;
+		width: 54px;
+	}
+
+	.EditorWelcomeState h2 {
+		font-family: 'Fraunces', serif;
+		font-size: 24px;
+		font-weight: 400;
+	}
+
+	.EditorWelcomeState p {
+		color: var(--Ink2);
+		font-size: 13px;
+		margin-top: 4px;
+	}
+
+	.EditorWelcomeSteps {
+		display: flex;
+		gap: 8px;
+	}
+
+	.EditorWelcomeSteps span {
+		align-items: center;
+		background: var(--Page);
+		border: 1px solid var(--RuleSoft);
+		border-radius: 999px;
+		color: var(--Ink2);
+		display: inline-flex;
+		font-size: 12px;
+		gap: 5px;
+		padding: 6px 9px;
 	}
 
 	.EditorModePanel {
@@ -6113,6 +6290,30 @@
 		.LeadGrid {
 			grid-template-columns: 1fr;
 		}
+
+		.EditorTopbar,
+		.EditorLayout,
+		.EditorTimelineShell,
+		.EditorWelcomeState {
+			grid-template-columns: 1fr;
+		}
+
+		.EditorReadinessStrip {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		.EditorQueuePicker {
+			border-bottom: 1px solid var(--Rule);
+			border-right: 0;
+		}
+
+		.EditorQueueList {
+			grid-auto-flow: column;
+			grid-auto-columns: minmax(220px, 280px);
+			overflow-x: auto;
+			overflow-y: hidden;
+			padding-bottom: 4px;
+		}
 	}
 
 	@media (max-width: 760px) {
@@ -6146,6 +6347,37 @@
 
 		.Topnav {
 			overflow-x: auto;
+		}
+
+		.EditorTopbar {
+			align-items: stretch;
+			padding: 14px;
+		}
+
+		.EditorStepSwitch {
+			overflow-x: auto;
+		}
+
+		.EditorContextCard,
+		.EditorPrimaryAction {
+			align-items: start;
+			grid-template-columns: 1fr;
+		}
+
+		.EditorContextCard {
+			display: grid;
+		}
+
+		.EditorContextStats {
+			justify-content: flex-start;
+		}
+
+		.EditorReadinessStrip {
+			grid-template-columns: 1fr;
+		}
+
+		.EditorWelcomeSteps {
+			flex-wrap: wrap;
 		}
 
 		.CreatorHeader,
