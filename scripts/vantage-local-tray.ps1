@@ -76,7 +76,14 @@ function Stop-VantageWorkers {
 }
 
 function Show-VantageStatus {
-	$Status = if ($Script:WorkerProcess -and !$Script:WorkerProcess.HasExited) { "running, pid $($Script:WorkerProcess.Id)" } else { "stopped" }
+	if ($Script:WorkerProcess -and $Script:WorkerProcess.HasExited) {
+		$Status = "stopped, last worker stack exit code $($Script:WorkerProcess.ExitCode)"
+		$NotifyIcon.Text = "Vantage Local stopped"
+	} elseif ($Script:WorkerProcess) {
+		$Status = "running, pid $($Script:WorkerProcess.Id)"
+	} else {
+		$Status = "tray ready, workers not started from this tray session"
+	}
 	[System.Windows.Forms.MessageBox]::Show("Vantage Local is $Status.`nWorkers: $Workers`nEnv: $EnvFile", "Vantage Local") | Out-Null
 }
 

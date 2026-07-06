@@ -101,13 +101,13 @@ async function WriteHeartbeat(Status: string, Message = '') {
 		const Now = new Date().toISOString();
 		for (let Attempt = 0; Attempt < 3; Attempt++) {
 			try {
-				await Run('delete from worker_heartbeats where instance_id = ?', [InstanceId]);
+				const HeartbeatId = await NextId('worker_heartbeats');
 				await Run(
 					`insert into worker_heartbeats
 					 (id, instance_id, role, workers, status, pid, host, started_at, last_seen_at, message)
 					 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 					[
-						await NextId('worker_heartbeats'),
+						HeartbeatId,
 						InstanceId,
 						WorkerRole,
 						WorkerNames.join(','),
@@ -119,6 +119,7 @@ async function WriteHeartbeat(Status: string, Message = '') {
 						Message
 					]
 				);
+				await Run('delete from worker_heartbeats where instance_id = ? and id <> ?', [InstanceId, HeartbeatId]);
 				return;
 			} catch (Reason) {
 				if (Attempt === 2) throw Reason;

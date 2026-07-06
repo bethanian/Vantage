@@ -10,5 +10,12 @@ export async function GET() {
 		 from worker_heartbeats order by last_seen_at desc limit 12`
 	);
 
-	return json({ WorkerHeartbeats, ServerNow: new Date().toISOString() });
+	return json(
+		{ WorkerHeartbeats, ServerNow: new Date().toISOString() },
+		{
+			headers: {
+				'cache-control': 'no-store, max-age=0'
+			}
+		}
+	);
 }

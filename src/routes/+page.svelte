@@ -245,11 +245,31 @@
 			const Response = await fetch('/api/workers/heartbeats', { cache: 'no-store' });
 			if (!Response.ok) throw new Error(`worker heartbeat refresh failed: ${Response.status}`);
 			const Payload = await Response.json() as { WorkerHeartbeats?: WorkerHeartbeat[]; ServerNow?: string };
-			WorkerHeartbeats = Payload.WorkerHeartbeats ?? WorkerHeartbeats;
+			WorkerHeartbeats = MergeWorkerHeartbeats(WorkerHeartbeats, Payload.WorkerHeartbeats ?? []);
 			WorkerRefreshFailed = false;
 		} catch {
 			WorkerRefreshFailed = true;
 		}
+	}
+
+	function MergeWorkerHeartbeats(Current: WorkerHeartbeat[], Incoming: WorkerHeartbeat[]) {
+		const ByInstance = new Map<string, WorkerHeartbeat>();
+		for (const Heartbeat of Current) ByInstance.set(Heartbeat.InstanceId, Heartbeat);
+		for (const Heartbeat of Incoming) {
+			const Existing = ByInstance.get(Heartbeat.InstanceId);
+			if (!Existing || HeartbeatTime(Heartbeat) >= HeartbeatTime(Existing)) {
+				ByInstance.set(Heartbeat.InstanceId, Heartbeat);
+			}
+		}
+		return [...ByInstance.values()]
+			.filter((Heartbeat) => WorkerNow - HeartbeatTime(Heartbeat) < 1000 * 60 * 15)
+			.sort((A, B) => HeartbeatTime(B) - HeartbeatTime(A))
+			.slice(0, 12);
+	}
+
+	function HeartbeatTime(Heartbeat: WorkerHeartbeat) {
+		const Time = new Date(Heartbeat.LastSeenAt).getTime();
+		return Number.isFinite(Time) ? Time : 0;
 	}
 
 	function MatchesFeedFilter(Item: ContentItem, Filter: string) {
@@ -687,7 +707,7 @@
 
 	function IsWorkerFresh(Heartbeat?: WorkerHeartbeat) {
 		if (!Heartbeat?.LastSeenAt) return false;
-		const Fresh = WorkerNow - new Date(Heartbeat.LastSeenAt).getTime() < 1000 * 180;
+		const Fresh = WorkerNow - HeartbeatTime(Heartbeat) < 1000 * 300;
 		return Fresh && ['running', 'running-once', 'starting'].includes(Heartbeat.Status);
 	}
 
@@ -707,7 +727,7 @@
 
 	function WorkerAgeLabel(Heartbeat?: WorkerHeartbeat) {
 		if (!Heartbeat?.LastSeenAt) return 'no heartbeat';
-		const Seconds = Math.max(0, Math.round((WorkerNow - new Date(Heartbeat.LastSeenAt).getTime()) / 1000));
+		const Seconds = Math.max(0, Math.round((WorkerNow - HeartbeatTime(Heartbeat)) / 1000));
 		if (Seconds < 60) return `${Seconds}s ago`;
 		return `${Math.round(Seconds / 60)}m ago`;
 	}
