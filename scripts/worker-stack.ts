@@ -31,6 +31,7 @@ const StartedAt = new Date().toISOString();
 const WorkerNames = Selected.map((Worker) => Worker.Name);
 const WorkerRole = process.env.VANTAGE_WORKER_ROLE || (WorkerNames.includes('media') ? 'local-primary' : 'fallback');
 const InstanceId = process.env.VANTAGE_WORKER_INSTANCE_ID || `${WorkerRole}-${hostname()}-${process.pid}`;
+const ChildRestartDelayMs = Number(process.env.VANTAGE_CHILD_WORKER_RESTART_DELAY_MS ?? 5000);
 let ShuttingDown = false;
 
 if (!Selected.length) {
@@ -51,22 +52,34 @@ await WriteHeartbeat(RunOnce ? 'completed-once' : 'exited', 'worker stack finish
 if (!RunOnce) process.exit(process.exitCode ?? 0);
 
 async function RunWorker(Worker: WorkerSpec) {
+	while (!ShuttingDown) {
+		const Code = await RunWorkerProcess(Worker);
+		if (RunOnce) {
+			if (Code) process.exitCode = Code;
+			return;
+		}
+		if (ShuttingDown) return;
+		console.error(JSON.stringify({ Worker: Worker.Name, Status: 'Exited', Code, Action: 'Restarting' }));
+		await WriteHeartbeat('running', `${Worker.Name} worker restarted after exit code ${Code ?? 'unknown'}`);
+		await Sleep(ChildRestartDelayMs);
+	}
+}
+
+async function RunWorkerProcess(Worker: WorkerSpec) {
 	const Args = [Worker.Script, ...(RunOnce ? ['--once'] : [])];
 	const Child = spawn(process.execPath, ['--import', 'tsx', ...Args], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 	Children.set(Worker.Name, Child);
 	Child.stdout?.on('data', (Chunk) => WriteLog(Worker.Name, Chunk));
 	Child.stderr?.on('data', (Chunk) => WriteLog(Worker.Name, Chunk, true));
-	const Code = await new Promise<number | null>((Resolve, Reject) => {
-		Child.on('error', Reject);
+	const Code = await new Promise<number | null>((Resolve) => {
+		Child.on('error', (Reason) => {
+			console.error(JSON.stringify({ Worker: Worker.Name, Status: 'SpawnError', Message: Reason.message }));
+			Resolve(1);
+		});
 		Child.on('close', Resolve);
 	});
 	Children.delete(Worker.Name);
-	if (RunOnce && Code) process.exitCode = Code;
-	if (!RunOnce && !ShuttingDown) {
-		console.error(JSON.stringify({ Worker: Worker.Name, Status: 'Exited', Code }));
-		process.exitCode = Code ?? 1;
-		Shutdown();
-	}
+	return Code;
 }
 
 function SelectedWorkers() {
