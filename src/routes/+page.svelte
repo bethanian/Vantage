@@ -218,6 +218,14 @@
 		if (!WorkerHeartbeats.length) WorkerHeartbeats = data.WorkerHeartbeats as WorkerHeartbeat[];
 	});
 
+	$effect(() => {
+		const NextQueueState = InitialQueueState();
+		QueueState = NextQueueState;
+		if (SelectedEditorTaskId && !NextQueueState.some((Task) => Task.Id === SelectedEditorTaskId)) {
+			SelectedEditorTaskId = null;
+		}
+	});
+
 	onMount(() => {
 		const SavedActor = localStorage.getItem('VantageActorName') ?? '';
 		ActorName = SavedActor;
@@ -942,6 +950,22 @@
 		};
 	}
 
+	function DeleteQueueTaskFeedback(TaskId: number): SubmitFunction {
+		return ({ formData }) => {
+			formData.set('Actor', ActorName || ActorDraft || 'Someone');
+			return async ({ result, update }) => {
+				await update();
+				const Failed = result.type === 'failure' || result.type === 'error';
+				if (!Failed) {
+					QueueState = QueueState.filter((Task) => Task.Id !== TaskId);
+					if (SelectedEditorTaskId === TaskId) SelectedEditorTaskId = null;
+					if (EditingTaskId === TaskId) EditingTaskId = null;
+				}
+				PushToast(`Clip ${Failed ? 'failed' : 'removed'}`, Failed ? 'Error' : 'Success');
+			};
+		};
+	}
+
 	async function ToastedFetch(Url: string, Message: string) {
 		const Response = await fetch(Url, { method: 'POST', headers: { 'x-vantage-actor': ActorName || ActorDraft || 'Someone' } });
 		const Payload = await Response.json().catch(() => ({} as { Message?: string; Status?: string }));
@@ -1523,7 +1547,7 @@
 								<button class="IconButton" aria-label={`Edit clip task ${Task.Id}`} onclick={() => (EditingTaskId = EditingTaskId === Task.Id ? null : Task.Id)}>
 									<i class="ti ti-edit"></i>
 								</button>
-								<form method="POST" action="?/DeleteClipTask" class="InlineDelete TableDelete" use:enhance={FormFeedback('Clip', 'removed')}>
+								<form method="POST" action="?/DeleteClipTask" class="InlineDelete TableDelete" use:enhance={DeleteQueueTaskFeedback(Task.Id)}>
 									<input type="hidden" name="Id" value={Task.Id} />
 									<button class="IconButton Danger" aria-label={`Delete clip task ${Task.Id}`}><i class="ti ti-trash"></i></button>
 								</form>
